@@ -2,6 +2,7 @@ import argparse
 import os
 from src.errors import ParsingError
 from src.parser import load_prompts, load_functions
+from src.orchestrator import Orchestrator
 
 
 def setup_arg_parser() -> argparse.ArgumentParser:
@@ -38,6 +39,11 @@ def main() -> None:
         args = arg_parser.parse_args()
         prompts = load_prompts(args.input)
         functions = load_functions(args.functions_definition)
+        orchestrator = Orchestrator(functions)
+
+        for user_prompt in prompts:
+            orchestrator.generate_with_constraints(user_prompt)
+
 
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):

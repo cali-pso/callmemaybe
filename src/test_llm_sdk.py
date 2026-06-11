@@ -22,6 +22,14 @@ def main() -> None:
         predicted_text = model.decode([predicted_token_id])
         print(f"{predicted_text}", end="")
 
+def get_special_tokens() -> None:
+    model = Small_LLM_Model()
+    tknzr_path = model.get_path_to_tokenizer_file()
+    with open(tknzr_path, "r") as file:
+        print(file.read())
+        print(file)
+
+
 
 if __name__ == "__main__":
-    main()
+    get_special_tokens()
