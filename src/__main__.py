@@ -7,7 +7,7 @@ from src.parser import load_prompts, load_functions
 def setup_arg_parser() -> argparse.ArgumentParser:
     """Setup and return argument parser with argparse"""
     parser = argparse.ArgumentParser(
-        description="LLM Function Calling Tool: natural language into JSON."
+        description="LLM Function Calling: from natural language to JSON."
     )
 
     parser.add_argument(

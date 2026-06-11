@@ -14,12 +14,13 @@ def main() -> None:
         input_ids = input_ids.tolist()
 
     predicted_text = ""
-    while ("\n" not in predicted_text):
+    while (1):
         logits: List[float] = model.get_logits_from_input_ids(input_ids[0])
         max_logit_value = max(logits)
         predicted_token_id = logits.index(max_logit_value)
+        input_ids[0].append(predicted_token_id)
         predicted_text = model.decode([predicted_token_id])
-        print(f"Predicted token: '{predicted_text}'")
+        print(f"{predicted_text}", end="")
 
 
 if __name__ == "__main__":
