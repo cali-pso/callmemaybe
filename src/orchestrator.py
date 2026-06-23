@@ -43,7 +43,7 @@ class Orchestrator:
         for token in generator.generate(full_prompt, self.constrainer):
             answer_ids.append(token)
         answer = self.model.decode(answer_ids)
-        print(answer)
+        return answer
 
 
 class Generator:
