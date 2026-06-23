@@ -4,6 +4,8 @@ from typing import List, Dict
 from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
 
+MAX_TOKENS = 50
+
 
 class Orchestrator:
     def __init__(self, functions: List) -> None:
@@ -62,7 +64,8 @@ class Generator:
 
         json_has_started = False
         brace_count = 0
-        while True:
+        tokens_count = 0
+        while tokens_count <= MAX_TOKENS:
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
             logits_filtered = constrainer.apply_constraints(
@@ -82,6 +85,7 @@ class Generator:
             if "}" in generated_str:
                 brace_count -= 1
 
+            tokens_count += 1
             yield generated_token
 
             if brace_count == 0 and json_has_started:
@@ -94,29 +98,33 @@ class OutputConstrainer:
         self.vocab_size = len(vocab)
         self.model = model
 
-        self.banned_tokens = set()
         banned_str_list = ["`", "<think>", "</think>"]
+
+        needed_tokens_str = ["{", "}", "\n"]
+        self.essential_tokens: Dict[str, int] = {
+            c: self.model.encode(c) for c in needed_tokens_str
+        }
+
+        self.default_mask = numpy.ones(151936, dtype=bool)
         for token_id, token_str in self.vocab.items():
             for s in banned_str_list:
                 if s in token_str:
-                    self.banned_tokens.add(token_id)
+                    self.default_mask[token_id] = False
+        self.all_false_mask = numpy.zeros(151936, dtype=bool)
 
     def apply_constraints(
         self, current_text: str, logits_np: numpy.ndarray
     ) -> numpy.ndarray:
-        mask = numpy.zeros(len(logits_np), dtype=bool)
         return_np = logits_np
 
         if len(current_text) == 0:
-            for token_id, token_str in self.vocab.items():
-                if "{" == token_str:
-                    mask[token_id] = True
+            mask = self.all_false_mask.copy()
+            mask[self.essential_tokens["{"]] = True
         elif current_text[-1] in ["{", "}"]:
-            mask[self.model.encode("\n")] = True
+            mask = self.all_false_mask.copy()
+            mask[self.essential_tokens["\n"]] = True
         else:
-            mask[:] = True
-            for token in self.banned_tokens:
-                mask[token] = False
+            mask = self.default_mask.copy()
 
         return_np[~mask] = -(numpy.inf)
         return return_np
