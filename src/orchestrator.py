@@ -1,5 +1,4 @@
 import json
-import sys
 import numpy
 from typing import List, Dict
 from llm_sdk import Small_LLM_Model
@@ -16,7 +15,7 @@ class Orchestrator:
         self.tokenizer = self.load_tokenizer(
             self.model.get_path_to_tokenizer_file()
         )
-        self.constrainer = OutputConstrainer(self.vocab)
+        self.constrainer = OutputConstrainer(self.vocab, self.model)
 
     @staticmethod
     def load_tokenizer(tokenizer_path: str) -> dict[str, str]:
@@ -37,13 +36,12 @@ class Orchestrator:
         return id_to_string
 
     def generate_with_constraints(self, user_prompt: str) -> str:
-        print(f"Starting generation process with prompt: {user_prompt}")
+        print(f"\n\nStarting generation process with {user_prompt}\n")
         full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
         generator = Generator(self.model, self.tokenizer)
         answer_ids = []
         for token in generator.generate(full_prompt, self.constrainer):
             answer_ids.append(token)
-        print("Decoding...")
         answer = self.model.decode(answer_ids)
         print(answer)
 
@@ -61,27 +59,47 @@ class Generator:
 
         generated_token = ""
         generated_text = ""
+
+        json_has_started = False
+        brace_count = 0
         while True:
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
             logits_filtered = constrainer.apply_constraints(
                 generated_text, logits_np
             )
-           #print([logit for logit in logits_np if logit != -numpy.inf])
-           #print([logit for logit in logits_filtered if logit != -numpy.inf])
             generated_token = int(numpy.argmax(logits_filtered))
-           #sys.exit(1)
             if generated_token == end_of_text_token:
                 break
             input_ids[0].append(generated_token)
-            generated_text += self.model.decode(generated_token)
+            generated_str = self.model.decode(generated_token)
+            generated_text += generated_str
+
+            if "{" in generated_str:
+                brace_count += 1
+                if not json_has_started:
+                    json_has_started = True
+            if "}" in generated_str:
+                brace_count -= 1
+
             yield generated_token
+
+            if brace_count == 0 and json_has_started:
+                break
 
 
 class OutputConstrainer:
-    def __init__(self, vocab: Dict[int, str]) -> None:
+    def __init__(self, vocab: Dict[int, str], model) -> None:
         self.vocab = vocab
         self.vocab_size = len(vocab)
+        self.model = model
+
+        self.banned_tokens = set()
+        banned_str_list = ["`", "<think>", "</think>"]
+        for token_id, token_str in self.vocab.items():
+            for s in banned_str_list:
+                if s in token_str:
+                    self.banned_tokens.add(token_id)
 
     def apply_constraints(
         self, current_text: str, logits_np: numpy.ndarray
@@ -93,8 +111,12 @@ class OutputConstrainer:
             for token_id, token_str in self.vocab.items():
                 if "{" == token_str:
                     mask[token_id] = True
+        elif current_text[-1] in ["{", "}"]:
+            mask[self.model.encode("\n")] = True
         else:
             mask[:] = True
+            for token in self.banned_tokens:
+                mask[token] = False
 
         return_np[~mask] = -(numpy.inf)
         return return_np
