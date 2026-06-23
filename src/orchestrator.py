@@ -11,12 +11,8 @@ class Orchestrator:
     def __init__(self, functions: List) -> None:
         self.functions = functions
         self.model = Small_LLM_Model()
-        self.vocab = self.load_vocabulary_mapping(
-            self.model.get_path_to_vocab_file()
-        )
-        self.tokenizer = self.load_tokenizer(
-            self.model.get_path_to_tokenizer_file()
-        )
+        self.vocab = self.load_vocabulary_mapping(self.model.get_path_to_vocab_file())
+        self.tokenizer = self.load_tokenizer(self.model.get_path_to_tokenizer_file())
         self.constrainer = OutputConstrainer(self.vocab, self.model)
 
     @staticmethod
@@ -32,8 +28,7 @@ class Orchestrator:
             vocab_json = json.load(f)
 
         id_to_string = {
-            int(token_id): token_str
-            for token_str, token_id in vocab_json.items()
+            int(token_id): token_str for token_str, token_id in vocab_json.items()
         }
         return id_to_string
 
@@ -68,9 +63,7 @@ class Generator:
         while tokens_count <= MAX_TOKENS:
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
-            logits_filtered = constrainer.apply_constraints(
-                generated_text, logits_np
-            )
+            logits_filtered = constrainer.apply_constraints(generated_text, logits_np)
             generated_token = int(numpy.argmax(logits_filtered))
             if generated_token == end_of_text_token:
                 break
@@ -86,10 +79,23 @@ class Generator:
                 brace_count -= 1
 
             tokens_count += 1
+            skip = self.check_for_skip(generated_text, brace_count)
+            if skip is not None:
+                for token in skip[0]:
+                    input_ids[0].append(token)
             yield generated_token
 
             if brace_count == 0 and json_has_started:
                 break
+        print(self.model.decode(input_ids[0]))
+
+    def check_for_skip(self, text: str, brace_count: int) -> list[int]:
+        tokens = None
+        if text and len(text) == 2 and text == "{\n":
+            tokens = self.model.encode('"name": "fn')
+        elif text and len([c for c in text if c == "\n"]) == 2:
+            tokens = self.model.encode('"parameters":')
+        return tokens
 
 
 class OutputConstrainer:
@@ -156,9 +162,7 @@ class PromptMaker:
         final += "You are an expert that translates natural language requests"
         final += " into strict JSON function calls.\n"
         final += "You must NOT answer the question directly. You must ONLY"
-        final += (
-            " output a valid JSON object choosing the correct function.\n\n"
-        )
+        final += " output a valid JSON object choosing the correct function.\n\n"
 
         final += PromptMaker.get_functions_as_prompt(functions)
         final += "<|im_end|>\n"
