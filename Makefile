@@ -3,8 +3,11 @@ FLAKE = uv run flake8
 MYPY = uv run mypy
 SRC = src
 
+export HF_HUB_CACHE = /dev/shm/cmb/venv/hfhc
+
 install:
-	uv sync
+	uv -n sync
+	uv run hf download Qwen/Qwen3-0.6B --cache-dir /dev/shm/cmb/venv/hfhc
 
 run:
 	$(PYTHON) -m $(SRC)

@@ -9,7 +9,7 @@ dependencies = [
     "flake8>=7.3.0",
     "llm-sdk",
     "mypy>=2.1.0",
-    "numpy>=2.4.6",
+    "numpy",
     "pydantic>=2.13.4",
 ]
 
@@ -20,3 +20,6 @@ members = [
 
 [tool.uv.sources]
 llm-sdk = { workspace = true }
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"
