@@ -65,7 +65,6 @@ class Generator:
         brace_count = 0
         tokens_count = 0
         while tokens_count <= MAX_TOKENS:
-
             skip = self.check_for_skip(generated_text, brace_count)
             if skip is not None:
                 for token in skip[0]:

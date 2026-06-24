@@ -58,11 +58,12 @@ def main1() -> None:
     except ParsingError as e:
         print(f"Error parsing: {e}")
 
+
 def main() -> None:
     try:
         arg_parser = setup_arg_parser()
         args = arg_parser.parse_args()
-        
+
         prompts = load_prompts(args.input)
         functions = load_functions(args.functions_definition)
         orchestrator = Orchestrator(functions)
@@ -74,23 +75,24 @@ def main() -> None:
         print(f"Starting generation for {total_prompts} prompts...\n")
 
         for i, prompt_obj in enumerate(prompts, start=1):
-            
             print(f"[{i}/{total_prompts}] Translating: '{prompt_obj.prompt}'")
-            
-            answer_str = orchestrator.generate_with_constraints(prompt_obj.prompt)
-            print(answer_str) 
+
+            answer_str = orchestrator.generate_with_constraints(
+                prompt_obj.prompt
+            )
+            print(answer_str)
             try:
                 parsed_answer = json.loads(answer_str.strip("\n"))
-                
+
                 result_entry = {
                     "prompt": prompt_obj.prompt,
                     "name": parsed_answer.get("name", ""),
-                    "parameters": parsed_answer.get("parameters", {})
+                    "parameters": parsed_answer.get("parameters", {}),
                 }
-                
+
                 final_results.append(result_entry)
                 print("SUCCESS")
-                
+
             except json.JSONDecodeError:
                 print("FAILED (Invalid JSON format)")
             except Exception as e:
@@ -102,11 +104,11 @@ def main() -> None:
             os.makedirs(output_dir)
 
         print(f"\nWriting results to '{args.output}'...")
-        
+
         # 5. Write the final formatted list to the JSON file
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(final_results, f, indent=4)
-            
+
         print("Done.")
 
     except ParsingError as e:
