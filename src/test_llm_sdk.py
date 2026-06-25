@@ -30,6 +30,9 @@ def get_special_tokens() -> None:
         print(file.read())
         print(file)
 
+def get_id_from_char() -> None:
+    print(Small_LLM_Model().encode('  "'))
+
 
 if __name__ == "__main__":
-    get_special_tokens()
+    get_id_from_char()

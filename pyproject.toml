@@ -1,0 +1,25 @@
+[project]
+name = "callmemaybe"
+version = "0.1.0"
+description = "rapoggi's try at Call Me Maybe"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "accelerate>=1.13.0",
+    "flake8>=7.3.0",
+    "llm-sdk",
+    "mypy>=2.1.0",
+    "numpy",
+    "pydantic>=2.13.4",
+]
+
+[tool.uv.workspace]
+members = [
+    "llm_sdk",
+]
+
+[tool.uv.sources]
+llm-sdk = { workspace = true }
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"

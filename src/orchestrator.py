@@ -1,6 +1,7 @@
 import json
 import numpy
-from typing import List, Dict
+import re
+from typing import List, Dict, Tuple, Optional
 from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
 
@@ -17,7 +18,9 @@ class Orchestrator:
         self.tokenizer = self.load_tokenizer(
             self.model.get_path_to_tokenizer_file()
         )
-        self.constrainer = OutputConstrainer(self.vocab, self.model)
+        self.constrainer = OutputConstrainer(
+            self.vocab, self.model, self.functions
+        )
 
     @staticmethod
     def load_tokenizer(tokenizer_path: str) -> dict[str, str]:
@@ -39,7 +42,7 @@ class Orchestrator:
 
     def generate_with_constraints(self, user_prompt: str) -> str:
         full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
-        generator = Generator(self.model, self.tokenizer)
+        generator = Generator(self.model, self.tokenizer, self.functions)
         answer_ids = []
         for token in generator.generate(full_prompt, self.constrainer):
             answer_ids.append(token)
@@ -48,9 +51,10 @@ class Orchestrator:
 
 
 class Generator:
-    def __init__(self, model, tokenizer) -> None:
+    def __init__(self, model, tokenizer, functions: List) -> None:
         self.model = model
         self.tokenizer = tokenizer
+        self.functions_dict = {f.name: f for f in functions}
 
     def generate(self, prompt: str, constrainer) -> int:
         input_ids = self.model.encode(prompt)
@@ -64,56 +68,79 @@ class Generator:
         json_has_started = False
         brace_count = 0
         tokens_count = 0
+        context = None
         while tokens_count <= MAX_TOKENS:
-            skip = self.check_for_skip(generated_text, brace_count)
+            skip = self.check_for_skip(generated_text, brace_count, context)
             if skip is not None:
                 for token in skip[0]:
                     input_ids[0].append(token)
                     yield token
-
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
-            logits_filtered = constrainer.apply_constraints(
+            logits_filtered, context = constrainer.apply_constraints(
                 generated_text, logits_np
             )
+            func_name, current_param, is_inside_string = context
             generated_token = int(numpy.argmax(logits_filtered))
             if generated_token == end_of_text_token:
                 break
             generated_str = self.model.decode(generated_token)
-            generated_text += generated_str
+            skipped_str = ""
+            if skip is not None:
+                for token in skip[0]:
+                    skipped_str += self.model.decode(token)
+            generated_text += str(skipped_str) + str(generated_str)
             input_ids[0].append(generated_token)
 
-            if "{" in generated_str:
+            if "{" in skipped_str + generated_str:
                 brace_count += 1
                 if not json_has_started:
                     json_has_started = True
-            if "}" in generated_str:
+            if "}" in skipped_str + generated_str:
                 brace_count -= 1
 
             tokens_count += 1
+            print(generated_str, end="", flush=True)
             yield generated_token
 
             if brace_count == 0 and json_has_started:
                 break
 
-    def check_for_skip(self, text: str, brace_count: int) -> list[int]:
-        tokens = None
-        if text and len(text) == 2 and text == "{\n":
-            tokens = self.model.encode('"name": "fn')
-        elif text and len([c for c in text if c == "\n"]) == 2:
-            tokens = self.model.encode('"parameters":')
+    def check_for_skip(
+        self, text: str, brace_count: int, context: Tuple
+    ) -> list[int]:
+        skipped = ""
+        if not text:
+            skipped += '{\n"func_name": "'
+        if context is not None:
+            func_name, params_match, is_inside_string = context
+            if func_name and '"parameters": {\n' not in text:
+                skipped += 'parameters": {\n'
+                text += skipped
+            if func_name and "parameters" in text and text[-1] == "\n":
+                func_def = self.functions_dict[func_name]
+                param_names = list(func_def.parameters.keys())
+                if len(param_names) >= len(params_match):
+                    if param_names[len(params_match) - 1] not in params_match:
+                        skipped += (
+                            f'  "{param_names[len(params_match) - 1]}": '
+                        )
+
+        tokens = self.model.encode(skipped) if len(skipped) > 0 else None
         return tokens
 
 
 class OutputConstrainer:
-    def __init__(self, vocab: Dict[int, str], model) -> None:
+    def __init__(self, vocab: Dict[int, str], model, functions: List) -> None:
         self.vocab = vocab
         self.vocab_size = len(vocab)
         self.model = model
 
+        self.functions_dict = {f.name: f for f in functions}
+
         banned_str_list = ["`", "<think>", "</think>"]
 
-        needed_tokens_str = ["{", "}", "\n"]
+        needed_tokens_str = ["{\n", "}\n"]
         self.essential_tokens: Dict[str, int] = {
             c: self.model.encode(c) for c in needed_tokens_str
         }
@@ -125,22 +152,114 @@ class OutputConstrainer:
                     self.default_mask[token_id] = False
         self.all_false_mask = numpy.zeros(151936, dtype=bool)
 
+        # --- NEW: Pre-compute type-specific masks ---
+        self.int_mask = self._build_char_subset_mask("0123456789, }\n")
+
+        self.float_mask = self._build_char_subset_mask("0123456789., }\n")
+
+        self.string_mask = self._build_safe_string_mask()
+
+    def _build_char_subset_mask(self, allowed_chars: str) -> numpy.ndarray:
+        """
+        Creates a mask where tokens are only allowed if ALL their characters
+        belong to the allowed_chars string.
+        """
+        mask = numpy.zeros(self.vocab_size, dtype=bool)
+        allowed_set = set(allowed_chars)
+        for token_id, token_str in self.vocab.items():
+            # Strip spaces to ensure we don't accidentally block spacing tokens
+            if set(token_str.strip()).issubset(allowed_set):
+                mask[token_id] = True
+        return mask
+
+    def _build_safe_string_mask(self) -> numpy.ndarray:
+        """
+        Bans tokens that contain unescaped quotes or newlines, preventing
+        the LLM from breaking JSON syntax internally.
+        """
+        mask = self.default_mask.copy()
+        #       for token_id, token_str in self.vocab.items():
+        #           # Ban tokens that contain a bare quote not preceded by a backslash.
+        #           # (Allows single '"' to close the string, but bans 'abc"def')
+        #           if (
+        #               '"' in token_str
+        #               and token_str != '"'
+        #               and '\\"' not in token_str
+        #           ):
+        #               mask[token_id] = False
+        #           # Ban tokens with bare newlines, forcing the model to use \n
+        #           if "\n" in token_str and "\\n" not in token_str:
+        #               mask[token_id] = False
+        return mask
+
+    def _get_current_context(
+        self, current_text: str
+    ) -> Tuple[Optional[str], Optional[str], bool]:
+        """
+        Parses the generated JSON text to determine:
+        1. Function Name
+        2. Current Parameter
+        3. Whether the cursor is currently inside a string value
+        """
+        # Extract function name
+        name_match = re.search(r'"func_name"\s*:\s*"([^"]+)"', current_text)
+        func_name = name_match.group(1) if name_match else None
+
+        # Extract the last parameter key generated
+        params_match = re.findall(r'"([^"]+)"\s*:', current_text)
+        params_match = [
+            s for s in params_match if s not in ["func_name", "parameters"]
+        ]
+
+        # Determine if inside a string value by counting unescaped quotes
+        # We strip \" to avoid counting escaped quotes
+        text_no_escapes = current_text.replace('\\"', "")
+        is_inside_string = text_no_escapes.count('"') % 2 != 0
+
+        return func_name, params_match, is_inside_string
+
     def apply_constraints(
         self, current_text: str, logits_np: numpy.ndarray
     ) -> numpy.ndarray:
         return_np = logits_np
+        max_predicted = self.model.decode(int(numpy.argmax(logits_np)))
+        context = self._get_current_context(current_text)
+        func_name, params_match, is_inside_string = context
+        current_param = params_match[-1] if params_match else None
 
-        if len(current_text) == 0:
-            mask = self.all_false_mask.copy()
-            mask[self.essential_tokens["{"]] = True
-        elif current_text[-1] in ["{", "}"]:
-            mask = self.all_false_mask.copy()
-            mask[self.essential_tokens["\n"]] = True
-        else:
-            mask = self.default_mask.copy()
+        if (
+            "{" in max_predicted or "}" in max_predicted
+        ) and "\n" not in max_predicted:
+            mask = self.all_fall_mask.copy()
+            mask[
+                self.essential_tokens[
+                    ("{\n" if "{" in max_predicted else "}\n")
+                ]
+            ] = True
+            return_np[~mask] = -(numpy.inf)
+            return (return_np, context)
+        if func_name in self.functions_dict and current_param:
+            func_def = self.functions_dict[func_name]
 
-        return_np[~mask] = -(numpy.inf)
-        return return_np
+            if current_param in func_def.parameters:
+                param_type = func_def.parameters[current_param].type.lower()
+
+                if f'"{current_param}":' in current_text.replace(" ", ""):
+                    if param_type == "int" and not is_inside_string:
+                        # Enforce digits only, no dots
+                        return_np[~self.int_mask] = -(numpy.inf)
+                        return (return_np, context)
+
+                    elif param_type == "float" and not is_inside_string:
+                        # Enforce digits and dots
+                        return_np[~self.float_mask] = -(numpy.inf)
+                        return (return_np, context)
+
+                    elif param_type == "string" and is_inside_string:
+                        # Enforce safe character escaping
+                        return_np[~self.string_mask] = -(numpy.inf)
+                        return (return_np, context)
+        return (return_np, context)
 
 
 class PromptMaker:
