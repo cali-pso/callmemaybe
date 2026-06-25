@@ -86,7 +86,7 @@ def main() -> None:
 
                 result_entry = {
                     "prompt": prompt_obj.prompt,
-                    "name": parsed_answer.get("name", ""),
+                    "name": parsed_answer.get("func_name", ""),
                     "parameters": parsed_answer.get("parameters", {}),
                 }
 

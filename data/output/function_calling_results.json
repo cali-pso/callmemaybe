@@ -1,87 +1,87 @@
 [
     {
-        "prompt": "Greet shrek",
-        "name": "",
+        "prompt": "What is the product of 3 and 5?",
+        "name": "fn_multiply_numbers",
         "parameters": {
-            "name": "shrek"
+            "a": 3,
+            "b": 5
         }
     },
     {
-        "prompt": "Greet john",
-        "name": "",
+        "prompt": "What is the product of 12 and 4?",
+        "name": "fn_multiply_numbers",
         "parameters": {
-            "name": "john"
+            "a": 12,
+            "b": 4
         }
     },
     {
-        "prompt": "Reverse the string 'hello'",
-        "name": "",
+        "prompt": "Is 4 an even number?",
+        "name": "fn_is_even",
         "parameters": {
-            "s": "hello"
+            "n": 4
         }
     },
     {
-        "prompt": "Reverse the string 'world'",
-        "name": "",
+        "prompt": "Is 7 an even number?",
+        "name": "fn_is_even",
         "parameters": {
-            "s": "world"
+            "n": 7
         }
     },
     {
-        "prompt": "What is the square root of 16?",
-        "name": "",
+        "prompt": "Calculate compound interest on 1234567.89 at 0.0375 rate for 23 years",
+        "name": "fn_calculate_compound_interest",
         "parameters": {
-            "a": 16
+            "principal": 1234567.89,
+            "rate": 0.0375,
+            "years": 23
         }
     },
     {
-        "prompt": "Calculate the square root of 144",
-        "name": "",
+        "prompt": "Execute SQL query 'SELECT * FROM users' on the production database",
+        "name": "fn_execute_sql_query",
         "parameters": {
-            "a": 144
+            "query": "SELECT * FROM users",
+            "database": "production"
         }
     },
     {
-        "prompt": "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS",
-        "name": "",
+        "prompt": "Run the query 'INSERT INTO logs VALUES (1, 2, 3)' on the system database",
+        "name": "fn_execute_sql_query",
         "parameters": {
-            "source_string": "Hello 34 I'm 233 years old",
-            "regex": "([0-9]+)",
-            "replacement": "NUMBERS"
+            "query": "INSERT INTO logs VALUES (1, 2, 3)",
+            "database": "system"
         }
     },
     {
-        "prompt": "Replace all vowels in 'Programming is fun' with asterisks",
-        "name": "",
+        "prompt": "Read the file at /home/user/data.json with utf-8 encoding",
+        "name": "fn_read_file",
         "parameters": {
-            "source_string": "Programming is fun",
-            "regex": "([aeiouAEIOU])",
-            "replacement": " *"
+            "path": "/home/user/data.json",
+            "encoding": "utf-8"
         }
     },
     {
-        "prompt": "Substitute the word 'cat' with 'dog' in 'The cat sat on the mat with another cat'",
-        "name": "",
+        "prompt": "Read C:\\Users\\john\\config.ini with latin-1 encoding",
+        "name": "fn_read_file",
         "parameters": {
-            "source_string": "The cat sat on the mat with another cat",
-            "regex": "cat",
-            "replacement": "dog"
+            "path": "C:\\Users\\john\\config.ini",
+            "encoding": "latin-1"
         }
     },
     {
-        "prompt": "What is the sum of 2 and 3?",
-        "name": "",
+        "prompt": "Format template: Hello {user}'s profile!",
+        "name": "fn_format_template",
         "parameters": {
-            "a": 2,
-            "b": 3
+            "template": "Hello {user}'s profile!"
         }
     },
     {
-        "prompt": "What is the sum of 265 and 345?",
-        "name": "",
+        "prompt": "Format template: Say \"hello\" to {name}",
+        "name": "fn_format_template",
         "parameters": {
-            "a": 265,
-            "b": 345
+            "template": "Say hello to {name}"
         }
     }
 ]

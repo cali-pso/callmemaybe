@@ -4,6 +4,7 @@ MYPY = uv run mypy
 SRC = src
 
 export HF_HUB_CACHE = /dev/shm/cmb/venv/hfhc
+export HF_HUB_OFFLINE = 1
 
 install:
 	uv -n sync

@@ -131,9 +131,7 @@ class Generator:
                 param_names = list(func_def.parameters.keys())
                 if len(param_names) > len(params_match):
                     if param_names[len(params_match)] not in params_match:
-                        skipped += (
-                            f'  "{param_names[len(params_match)]}": '
-                        )
+                        skipped += f'  "{param_names[len(params_match)]}": '
                 else:
                     skipped += "}\n}\n"
 
@@ -149,9 +147,9 @@ class OutputConstrainer:
 
         self.functions_dict = {f.name: f for f in functions}
 
-        banned_str_list = ["`", "<think>", "</think>", ' "']
+        banned_str_list = ["`", "<think>", "</think>", ' "', " {", " }"]
 
-        needed_tokens_str = ["{\n", "}\n"]
+        needed_tokens_str = ["{", "}", "\\"]
         self.essential_tokens: Dict[str, int] = {
             c: self.model.encode(c) for c in needed_tokens_str
         }
@@ -189,18 +187,9 @@ class OutputConstrainer:
         the LLM from breaking JSON syntax internally.
         """
         mask = self.default_mask.copy()
-        #       for token_id, token_str in self.vocab.items():
-        #           # Ban tokens that contain a bare quote not preceded by a backslash.
-        #           # (Allows single '"' to close the string, but bans 'abc"def')
-        #           if (
-        #               '"' in token_str
-        #               and token_str != '"'
-        #               and '\\"' not in token_str
-        #           ):
-        #               mask[token_id] = False
-        #           # Ban tokens with bare newlines, forcing the model to use \n
-        #           if "\n" in token_str and "\\n" not in token_str:
-        #               mask[token_id] = False
+        # for token_id, token_str in self.vocab.items():
+        #   if "{" in token_str or "}" in token_str and "\\" not in token_str:
+        #       mask[token_id] = False
         return mask
 
     def _get_current_context(
@@ -212,18 +201,14 @@ class OutputConstrainer:
         2. Current Parameter
         3. Whether the cursor is currently inside a string value
         """
-        # Extract function name
         name_match = re.search(r'"func_name"\s*:\s*"([^"]+)"', current_text)
         func_name = name_match.group(1) if name_match else None
 
-        # Extract the last parameter key generated
         params_match = re.findall(r'"([^"]+)"\s*:', current_text)
         params_match = [
             s for s in params_match if s not in ["func_name", "parameters"]
         ]
 
-        # Determine if inside a string value by counting unescaped quotes
-        # We strip \" to avoid counting escaped quotes
         text_no_escapes = current_text.replace('\\"', "")
         is_inside_string = text_no_escapes.count('"') % 2 != 0
 
@@ -233,22 +218,10 @@ class OutputConstrainer:
         self, current_text: str, logits_np: numpy.ndarray
     ) -> numpy.ndarray:
         return_np = logits_np
-        max_predicted = self.model.decode(int(numpy.argmax(logits_np)))
         context = self._get_current_context(current_text)
         func_name, params_match, is_inside_string = context
         current_param = params_match[-1] if params_match else None
 
-        if (
-            "{" in max_predicted or "}" in max_predicted
-        ) and "\n" not in max_predicted:
-            mask = self.all_fall_mask.copy()
-            mask[
-                self.essential_tokens[
-                    ("{\n" if "{" in max_predicted else "}\n")
-                ]
-            ] = True
-            return_np[~mask] = -(numpy.inf)
-            return (return_np, context)
         if func_name in self.functions_dict and current_param:
             func_def = self.functions_dict[func_name]
 
@@ -257,17 +230,14 @@ class OutputConstrainer:
 
                 if f'"{current_param}": ' in current_text:
                     if param_type == "int" and not is_inside_string:
-                        # Enforce digits only, no dots
                         return_np[~self.int_mask] = -(numpy.inf)
                         return (return_np, context)
 
                     elif param_type == "float" and not is_inside_string:
-                        # Enforce digits and dots
                         return_np[~self.float_mask] = -(numpy.inf)
                         return (return_np, context)
 
                     elif param_type == "string" and is_inside_string:
-                        # Enforce safe character escaping
                         return_np[~self.string_mask] = -(numpy.inf)
                         return (return_np, context)
         return (return_np, context)
