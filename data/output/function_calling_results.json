@@ -45,43 +45,43 @@
         "prompt": "Replace all numbers in \"Hello 34 I'm 233 years old\" with NUMBERS",
         "name": "",
         "parameters": {
-            "replacement": 34,
             "source_string": "Hello 34 I'm 233 years old",
-            "regex": "([0-9]+)"
+            "regex": "([0-9]+)",
+            "replacement": "NUMBERS"
         }
     },
     {
         "prompt": "Replace all vowels in 'Programming is fun' with asterisks",
         "name": "",
         "parameters": {
-            "replacement": "*",
             "source_string": "Programming is fun",
-            "regex": "([aeiouAEIOU])"
+            "regex": "([aeiouAEIOU])",
+            "replacement": " *"
         }
     },
     {
         "prompt": "Substitute the word 'cat' with 'dog' in 'The cat sat on the mat with another cat'",
         "name": "",
         "parameters": {
-            "replacement": "dog",
             "source_string": "The cat sat on the mat with another cat",
-            "regex": "cat"
+            "regex": "cat",
+            "replacement": "dog"
         }
     },
     {
         "prompt": "What is the sum of 2 and 3?",
         "name": "",
         "parameters": {
-            "b": 3,
-            "a": 2
+            "a": 2,
+            "b": 3
         }
     },
     {
         "prompt": "What is the sum of 265 and 345?",
         "name": "",
         "parameters": {
-            "b": 345,
-            "a": 265
+            "a": 265,
+            "b": 345
         }
     }
 ]

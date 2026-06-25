@@ -71,10 +71,20 @@ class Generator:
         context = None
         while tokens_count <= MAX_TOKENS:
             skip = self.check_for_skip(generated_text, brace_count, context)
+            skipped_str = ""
             if skip is not None:
                 for token in skip[0]:
                     input_ids[0].append(token)
+                    decoded = self.model.decode(token)
+                    if "{" in decoded:
+                        brace_count += 1
+                        if not json_has_started:
+                            json_has_started = True
+                    if "}" in decoded:
+                        brace_count -= 1
+                    skipped_str += decoded
                     yield token
+
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
             logits_filtered, context = constrainer.apply_constraints(
@@ -85,23 +95,22 @@ class Generator:
             if generated_token == end_of_text_token:
                 break
             generated_str = self.model.decode(generated_token)
-            skipped_str = ""
-            if skip is not None:
-                for token in skip[0]:
-                    skipped_str += self.model.decode(token)
-            generated_text += str(skipped_str) + str(generated_str)
-            input_ids[0].append(generated_token)
 
-            if "{" in skipped_str + generated_str:
-                brace_count += 1
-                if not json_has_started:
-                    json_has_started = True
-            if "}" in skipped_str + generated_str:
-                brace_count -= 1
+            if brace_count != 0:
+                generated_text += str(skipped_str) + str(generated_str)
+                input_ids[0].append(generated_token)
 
-            tokens_count += 1
-            print(generated_str, end="", flush=True)
-            yield generated_token
+                if "{" in generated_str:
+                    brace_count += 1
+                    if not json_has_started:
+                        json_has_started = True
+                if "}" in generated_str:
+                    brace_count -= 1
+                skipped_str += decoded
+
+                tokens_count += 1
+                print(generated_str, end="", flush=True)
+                yield generated_token
 
             if brace_count == 0 and json_has_started:
                 break
@@ -120,11 +129,13 @@ class Generator:
             if func_name and "parameters" in text and text[-1] == "\n":
                 func_def = self.functions_dict[func_name]
                 param_names = list(func_def.parameters.keys())
-                if len(param_names) >= len(params_match):
-                    if param_names[len(params_match) - 1] not in params_match:
+                if len(param_names) > len(params_match):
+                    if param_names[len(params_match)] not in params_match:
                         skipped += (
-                            f'  "{param_names[len(params_match) - 1]}": '
+                            f'  "{param_names[len(params_match)]}": '
                         )
+                else:
+                    skipped += "}\n}\n"
 
         tokens = self.model.encode(skipped) if len(skipped) > 0 else None
         return tokens
@@ -138,7 +149,7 @@ class OutputConstrainer:
 
         self.functions_dict = {f.name: f for f in functions}
 
-        banned_str_list = ["`", "<think>", "</think>"]
+        banned_str_list = ["`", "<think>", "</think>", ' "']
 
         needed_tokens_str = ["{\n", "}\n"]
         self.essential_tokens: Dict[str, int] = {
@@ -153,9 +164,9 @@ class OutputConstrainer:
         self.all_false_mask = numpy.zeros(151936, dtype=bool)
 
         # --- NEW: Pre-compute type-specific masks ---
-        self.int_mask = self._build_char_subset_mask("0123456789, }\n")
+        self.int_mask = self._build_char_subset_mask("0123456789,\n")
 
-        self.float_mask = self._build_char_subset_mask("0123456789., }\n")
+        self.float_mask = self._build_char_subset_mask("0123456789.,\n")
 
         self.string_mask = self._build_safe_string_mask()
 
@@ -164,7 +175,7 @@ class OutputConstrainer:
         Creates a mask where tokens are only allowed if ALL their characters
         belong to the allowed_chars string.
         """
-        mask = numpy.zeros(self.vocab_size, dtype=bool)
+        mask = self.default_mask.copy()
         allowed_set = set(allowed_chars)
         for token_id, token_str in self.vocab.items():
             # Strip spaces to ensure we don't accidentally block spacing tokens
@@ -244,7 +255,7 @@ class OutputConstrainer:
             if current_param in func_def.parameters:
                 param_type = func_def.parameters[current_param].type.lower()
 
-                if f'"{current_param}":' in current_text.replace(" ", ""):
+                if f'"{current_param}": ' in current_text:
                     if param_type == "int" and not is_inside_string:
                         # Enforce digits only, no dots
                         return_np[~self.int_mask] = -(numpy.inf)
