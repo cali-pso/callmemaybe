@@ -1,17 +1,29 @@
 import json
 import numpy
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 MAX_TOKENS = 50
 
 
-class Orchestrator:
-    def __init__(self, functions: List) -> None:
-        self.functions = functions
-        self.model = Small_LLM_Model()
+class Orchestrator(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    functions: List[FuncDefinition]
+
+    model: Any = Field(default_factory=Small_LLM_Model)
+    vocab: Dict[int, str] = Field(default_factory=dict, init=False)
+    tokenizer: Dict[str, Any] = Field(default_factory=dict, init=False)
+    constrainer: Optional["OutputConstrainer"] = Field(
+        default=None, init=False
+    )
+
+    @model_validator(mode="after")
+    def initialize_components(self) -> "Orchestrator":
         self.vocab = self.load_vocabulary_mapping(
             self.model.get_path_to_vocab_file()
         )
@@ -19,8 +31,9 @@ class Orchestrator:
             self.model.get_path_to_tokenizer_file()
         )
         self.constrainer = OutputConstrainer(
-            self.vocab, self.model, self.functions
+            vocab=self.vocab, model=self.model, functions=self.functions
         )
+        return self
 
     @staticmethod
     def load_tokenizer(tokenizer_path: str) -> dict[str, str]:
@@ -42,7 +55,11 @@ class Orchestrator:
 
     def generate_with_constraints(self, user_prompt: str) -> str:
         full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
-        generator = Generator(self.model, self.tokenizer, self.functions)
+        generator = Generator(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            functions=self.functions,
+        )
         answer_ids = []
         for token in generator.generate(full_prompt, self.constrainer):
             answer_ids.append(token)
@@ -50,11 +67,21 @@ class Orchestrator:
         return answer
 
 
-class Generator:
-    def __init__(self, model, tokenizer, functions: List) -> None:
-        self.model = model
-        self.tokenizer = tokenizer
-        self.functions_dict = {f.name: f for f in functions}
+class Generator(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    model: Any
+    tokenizer: Dict[str, Any]
+    functions: List[FuncDefinition]
+
+    functions_dict: Dict[str, FuncDefinition] = Field(
+        default_factory=dict, init=False
+    )
+
+    @model_validator(mode="after")
+    def build_functions_dict(self) -> "Generator":
+        self.functions_dict = {f.name: f for f in self.functions}
+        return self
 
     def generate(self, prompt: str, constrainer) -> int:
         input_ids = self.model.encode(prompt)
@@ -139,34 +166,51 @@ class Generator:
         return tokens
 
 
-class OutputConstrainer:
-    def __init__(self, vocab: Dict[int, str], model, functions: List) -> None:
-        self.vocab = vocab
-        self.vocab_size = len(vocab)
-        self.model = model
+class OutputConstrainer(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        self.functions_dict = {f.name: f for f in functions}
+    vocab: Dict[int, str]
+    model: Any  # Allowing Small_LLM_Model
+    functions: List[FuncDefinition]
+
+    # Fields generated after initialization
+    vocab_size: int = Field(default=0, init=False)
+    functions_dict: Dict[str, FuncDefinition] = Field(
+        default_factory=dict, init=False
+    )
+    essential_tokens: Dict[str, int] = Field(default_factory=dict, init=False)
+    default_mask: numpy.ndarray = Field(default=None, init=False)
+    int_mask: numpy.ndarray = Field(default=None, init=False)
+    float_mask: numpy.ndarray = Field(default=None, init=False)
+    string_mask: numpy.ndarray = Field(default=None, init=False)
+
+    @model_validator(mode="after")
+    def setup_masks_and_dicts(self) -> "OutputConstrainer":
+        """
+        Sets up required attributes
+        """
+        self.vocab_size = len(self.vocab)
+        self.functions_dict = {f.name: f for f in self.functions}
 
         banned_str_list = ["`", "<think>", "</think>", ' "', " {", " }"]
-
         needed_tokens_str = ["{", "}", "\\"]
-        self.essential_tokens: Dict[str, int] = {
+
+        self.essential_tokens = {
             c: self.model.encode(c) for c in needed_tokens_str
         }
 
+        # Initialize masks
         self.default_mask = numpy.ones(151936, dtype=bool)
         for token_id, token_str in self.vocab.items():
             for s in banned_str_list:
                 if s in token_str:
                     self.default_mask[token_id] = False
-        self.all_false_mask = numpy.zeros(151936, dtype=bool)
 
-        # --- NEW: Pre-compute type-specific masks ---
         self.int_mask = self._build_char_subset_mask("0123456789,\n")
-
         self.float_mask = self._build_char_subset_mask("0123456789.,\n")
-
         self.string_mask = self._build_safe_string_mask()
+
+        return self
 
     def _build_char_subset_mask(self, allowed_chars: str) -> numpy.ndarray:
         """

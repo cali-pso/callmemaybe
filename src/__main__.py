@@ -39,7 +39,7 @@ def main1() -> None:
         args = arg_parser.parse_args()
         prompts = load_prompts(args.input)
         functions = load_functions(args.functions_definition)
-        orchestrator = Orchestrator(functions)
+        orchestrator = Orchestrator(functions=functions)
 
         for user_prompt in prompts:
             answer = orchestrator.generate_with_constraints(user_prompt)
@@ -66,7 +66,7 @@ def main() -> None:
 
         prompts = load_prompts(args.input)
         functions = load_functions(args.functions_definition)
-        orchestrator = Orchestrator(functions)
+        orchestrator = Orchestrator(functions=functions)
 
         # 1. Initialize a list to hold all formatted output objects
         final_results = []
