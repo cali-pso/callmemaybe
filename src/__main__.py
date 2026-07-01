@@ -2,7 +2,7 @@ import argparse
 import os
 import json
 from src.errors import ParsingError
-from src.parser import load_prompts, load_functions
+from src.parser import Parser
 from src.orchestrator import Orchestrator
 
 
@@ -33,39 +33,20 @@ def setup_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main1() -> None:
-    try:
-        arg_parser = setup_arg_parser()
-        args = arg_parser.parse_args()
-        prompts = load_prompts(args.input)
-        functions = load_functions(args.functions_definition)
-        orchestrator = Orchestrator(functions=functions)
-
-        for user_prompt in prompts:
-            answer = orchestrator.generate_with_constraints(user_prompt)
-            print(answer)
-            try:
-                json.loads(answer.strip("\n"))
-            except Exception as e:
-                print("invalid generated json!!!!\n", e)
-            else:
-                print("all is good in the world god is in his paradise")
-
-        output_dir = os.path.dirname(args.output)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-    except ParsingError as e:
-        print(f"Error parsing: {e}")
-
-
 def main() -> None:
+    """
+    Execute the primary entry point for batch processing function calls.
+
+    Reads user prompts, utilizes the constrained LLM generator to create valid
+    function call mappings, evaluates the success of the translations, writes
+    structured results back to a JSON file.
+    """
     try:
         arg_parser = setup_arg_parser()
         args = arg_parser.parse_args()
 
-        prompts = load_prompts(args.input)
-        functions = load_functions(args.functions_definition)
+        prompts = Parser.load_prompts(args.input)
+        functions = Parser.load_functions(args.functions_definition)
         orchestrator = Orchestrator(functions=functions)
 
         # 1. Initialize a list to hold all formatted output objects
@@ -113,6 +94,8 @@ def main() -> None:
 
     except ParsingError as e:
         print(f"Error parsing: {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 
 if __name__ == "__main__":

@@ -20,9 +20,12 @@ clean:
 	rm -rf __pycache__ .mypy_cache .pytest_cache
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 
+fclean: clean
+	rm -rf .venv
+
 lint:
 	- $(FLAKE) $(SRC)
-	- $(MYPY) --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs $(SRC)
+	- $(MYPY) --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs --explicit-package-bases $(SRC)
 
 lint-strict:
 	- $(FLAKE) $(SRC)
