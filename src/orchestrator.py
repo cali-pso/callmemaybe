@@ -1,8 +1,8 @@
 import json
 import numpy
 import re
-from typing import List, Dict, Tuple, Optional, Any
-from llm_sdk import Small_LLM_Model
+from typing import List, Dict, Tuple, Optional, Any, Generator
+from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 from src.models import FuncDefinition
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -33,7 +33,8 @@ class Orchestrator(BaseModel):
     @model_validator(mode="after")
     def initialize_components(self) -> "Orchestrator":
         """
-        Post-initialization hook to load tokenizer resources and build the constrainer.
+        Post-initialization hook to load tokenizer resources and build
+        the constrainer.
 
         Returns:
             Orchestrator: The initialized instance.
@@ -50,7 +51,7 @@ class Orchestrator(BaseModel):
         return self
 
     @staticmethod
-    def load_tokenizer(tokenizer_path: str) -> dict[str, str]:
+    def load_tokenizer(tokenizer_path: str) -> Any:
         """
         Parse the JSON tokenizer configuration into a Python dictionary.
 
@@ -58,7 +59,7 @@ class Orchestrator(BaseModel):
             tokenizer_path (str): The absolute path to `tokenizer.json`.
 
         Returns:
-            dict[str, str]: The parsed tokenizer object.
+            Dict[str, Any]: The parsed tokenizer object.
         """
         with open(tokenizer_path, "r") as f:
             tokenizer = json.load(f)
@@ -66,15 +67,17 @@ class Orchestrator(BaseModel):
         return tokenizer
 
     @staticmethod
-    def load_vocabulary_mapping(vocab_path: str) -> dict[int, str]:
+    def load_vocabulary_mapping(vocab_path: str) -> Dict[int, str]:
         """
-        Build an integer-to-string vocabulary dictionary from the model vocab.
+        Build an integer-to-string vocabulary dictionary from the model
+        vocab.
 
         Args:
             vocab_path (str): The absolute path to `vocab.json`.
 
         Returns:
-            dict[int, str]: A dictionary where keys are token IDs and values are tokens.
+            Dict[int, str]: A dictionary where keys are token IDs and
+            values are tokens.
         """
         with open(vocab_path, "r", encoding="utf-8") as f:
             vocab_json = json.load(f)
@@ -87,16 +90,18 @@ class Orchestrator(BaseModel):
 
     def generate_with_constraints(self, user_prompt: str) -> str:
         """
-        Translate a natural language prompt into a strictly formatted JSON function call.
+        Translate a natural language prompt into a strictly formatted JSON
+        function call.
 
         Args:
             user_prompt (str): The input request from the user.
 
         Returns:
-            str: The final, valid JSON string containing function name and arguments.
+            str: The final, valid JSON string containing function name
+            and arguments.
         """
         full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
-        generator = Generator(
+        generator = GeneratorCls(
             model=self.model,
             tokenizer=self.tokenizer,
             functions=self.functions,
@@ -105,10 +110,10 @@ class Orchestrator(BaseModel):
         for token in generator.generate(full_prompt, self.constrainer):
             answer_ids.append(token)
         answer = self.model.decode(answer_ids)
-        return answer
+        return str(answer)
 
 
-class Generator(BaseModel):
+class GeneratorCls(BaseModel):
     """
     Handles the token-by-token autoregressive decoding process.
 
@@ -128,19 +133,22 @@ class Generator(BaseModel):
     )
 
     @model_validator(mode="after")
-    def build_functions_dict(self) -> "Generator":
+    def build_functions_dict(self) -> "GeneratorCls":
         """
         Map available function definitions by their name for rapid lookup.
 
         Returns:
-            Generator: The updated instance.
+            GeneratorCls: The updated instance.
         """
         self.functions_dict = {f.name: f for f in self.functions}
         return self
 
-    def generate(self, prompt: str, constrainer) -> int:
+    def generate(
+        self, prompt: str, constrainer: Any
+    ) -> Generator[int, None, None]:
         """
-        Yield valid tokens iteratively until max length or completion is reached.
+        Yield valid tokens iteratively until max length or completion is
+        reached.
 
         Args:
             prompt (str): The complete formatted prompt text.
@@ -154,18 +162,18 @@ class Generator(BaseModel):
 
         end_of_text_token = self.tokenizer["added_tokens"][0]["id"]
 
-        generated_token = ""
         generated_text = ""
 
         json_has_started = False
         brace_count = 0
         tokens_count = 0
-        context = None
+        context: Optional[Tuple[Optional[str], List[str], bool]] = None
+
         while tokens_count <= MAX_TOKENS:
             skip = self.check_for_skip(generated_text, brace_count, context)
             skipped_str = ""
             if skip is not None:
-                for token in skip[0]:
+                for token in skip:
                     input_ids[0].append(token)
                     decoded = self.model.decode(token)
                     if "{" in decoded:
@@ -183,14 +191,14 @@ class Generator(BaseModel):
                 generated_text, logits_np
             )
             func_name, current_param, is_inside_string = context
-            generated_token = int(numpy.argmax(logits_filtered))
-            if generated_token == end_of_text_token:
+            generated_token_id = int(numpy.argmax(logits_filtered))
+            if generated_token_id == end_of_text_token:
                 break
-            generated_str = self.model.decode(generated_token)
+            generated_str = self.model.decode(generated_token_id)
 
             if brace_count != 0:
                 generated_text += str(skipped_str) + str(generated_str)
-                input_ids[0].append(generated_token)
+                input_ids[0].append(generated_token_id)
 
                 if "{" in generated_str:
                     brace_count += 1
@@ -198,28 +206,31 @@ class Generator(BaseModel):
                         json_has_started = True
                 if "}" in generated_str:
                     brace_count -= 1
-                skipped_str += decoded
 
                 tokens_count += 1
                 print(generated_str, end="", flush=True)
-                yield generated_token
+                yield generated_token_id
 
             if brace_count == 0 and json_has_started:
                 break
 
     def check_for_skip(
-        self, text: str, brace_count: int, context: Tuple
-    ) -> list[int]:
+        self,
+        text: str,
+        brace_count: int,
+        context: Optional[Tuple[Optional[str], List[str], bool]]
+    ) -> Any:
         """
         Determine if boilerplate JSON structuring can be safely fast-forwarded.
 
         Args:
             text (str): The current generated text string.
             brace_count (int): Counter for open curly brackets.
-            context (Tuple): Tuple containing the function context metadata.
+            context (Optional[Tuple]): Tuple containing function context.
 
         Returns:
-            list[int]: Encoded token list of the injected boilerplate, or None.
+            Optional[List[int]]: Encoded token list of the injected
+            boilerplate, or None.
         """
         skipped = ""
         if not text:
@@ -238,17 +249,21 @@ class Generator(BaseModel):
                 else:
                     skipped += "}\n}\n"
 
-        tokens = self.model.encode(skipped) if len(skipped) > 0 else None
-        return tokens
+        if len(skipped) > 0:
+            encoded = self.model.encode(skipped)
+            if hasattr(encoded, "tolist"):
+                return encoded.tolist()[0]
+            return list(encoded)[0]
+        return None
 
 
 class OutputConstrainer(BaseModel):
     """
     Applies logic-based mask filtering to probability logits.
 
-    By parsing the in-progress JSON string, this class determines which data type
-    is currently required and forcibly sets logits for invalid tokens to negative
-    infinity, guaranteeing the model outputs syntax-compliant values.
+    By parsing the in-progress JSON string, this class determines which data
+    type is currently required and forcibly sets logits for invalid tokens to
+    negative infinity, guaranteeing syntax-compliant outputs.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -262,11 +277,11 @@ class OutputConstrainer(BaseModel):
     functions_dict: Dict[str, FuncDefinition] = Field(
         default_factory=dict, init=False
     )
-    essential_tokens: Dict[str, int] = Field(default_factory=dict, init=False)
-    default_mask: numpy.ndarray = Field(default=None, init=False)
-    int_mask: numpy.ndarray = Field(default=None, init=False)
-    float_mask: numpy.ndarray = Field(default=None, init=False)
-    string_mask: numpy.ndarray = Field(default=None, init=False)
+    essential_tokens: Dict[str, Any] = Field(default_factory=dict, init=False)
+    default_mask: Any = Field(default=None, init=False)
+    int_mask: Any = Field(default=None, init=False)
+    float_mask: Any = Field(default=None, init=False)
+    string_mask: Any = Field(default=None, init=False)
 
     @model_validator(mode="after")
     def setup_masks_and_dicts(self) -> "OutputConstrainer":
@@ -296,7 +311,7 @@ class OutputConstrainer(BaseModel):
 
         return self
 
-    def _build_char_subset_mask(self, allowed_chars: str) -> numpy.ndarray:
+    def _build_char_subset_mask(self, allowed_chars: str) -> Any:
         """
         Creates a mask where tokens are only allowed if ALL their characters
         belong to the allowed_chars string.
@@ -304,12 +319,12 @@ class OutputConstrainer(BaseModel):
         mask = self.default_mask.copy()
         allowed_set = set(allowed_chars)
         for token_id, token_str in self.vocab.items():
-            # Strip spaces to ensure we don't accidentally block spacing tokens
+            # Strip spaces to ensure we don't accidentally block spacing
             if set(token_str.strip()).issubset(allowed_set):
                 mask[token_id] = True
         return mask
 
-    def _build_safe_string_mask(self) -> numpy.ndarray:
+    def _build_safe_string_mask(self) -> Any:
         """
         Bans tokens that contain unescaped quotes or newlines, preventing
         the LLM from breaking JSON syntax internally.
@@ -322,7 +337,7 @@ class OutputConstrainer(BaseModel):
 
     def _get_current_context(
         self, current_text: str
-    ) -> Tuple[Optional[str], Optional[str], bool]:
+    ) -> Tuple[Optional[str], List[str], bool]:
         """
         Parses the generated JSON text to determine:
         1. Function Name
@@ -344,16 +359,20 @@ class OutputConstrainer(BaseModel):
 
     def apply_constraints(
         self, current_text: str, logits_np: numpy.ndarray
-    ) -> numpy.ndarray:
+    ) -> Tuple[numpy.ndarray, Tuple[Optional[str], List[str], bool]]:
         """
-        Dynamically filters invalid token logits based on the current parsed state.
+        Dynamically filters invalid token logits based on the current
+        parsed state.
 
         Args:
             current_text (str): The JSON text generated so far.
-            logits_np (numpy.ndarray): The raw 1D array of unnormalized token scores.
+            logits_np (numpy.ndarray): The raw 1D array of unnormalized
+                token scores.
 
         Returns:
-            numpy.ndarray: The modified logit array where invalid tokens are heavily penalized.
+            Tuple[numpy.ndarray, Tuple[Optional[str], List[str], bool]]:
+                The modified logit array where invalid tokens are heavily
+                penalized, along with the parsed context.
         """
         return_np = logits_np
         context = self._get_current_context(current_text)
@@ -395,7 +414,8 @@ class PromptMaker(BaseModel):
             functions (List[FuncDefinition]): List of functions to format.
 
         Returns:
-            str: A formatted block mapping functions to their descriptions and parameters.
+            str: A formatted block mapping functions to their descriptions
+            and parameters.
         """
         formatted = ""
 
@@ -412,14 +432,16 @@ class PromptMaker(BaseModel):
     @staticmethod
     def build_prompt(user_prompt: str, functions: List[FuncDefinition]) -> str:
         """
-        Wrap the user's intent and the tools schema inside standard chat templates.
+        Wrap the user's intent and the tools schema inside standard chat
+        templates.
 
         Args:
             user_prompt (str): The query input by the user.
             functions (List[FuncDefinition]): List of allowed functions.
 
         Returns:
-            str: The final templated prompt formatted for optimal instruction following.
+            str: The final templated prompt formatted for optimal
+            instruction following.
         """
         final = ""
 
