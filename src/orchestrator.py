@@ -21,9 +21,11 @@ class Orchestrator(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    model_name: str = "Qwen/Qwen3-0.6B"
+
     functions: List[FuncDefinition]
 
-    model: Any = Field(default_factory=Small_LLM_Model)
+    model: Any = Field(default=None, init=False)
     vocab: Dict[int, str] = Field(default_factory=dict, init=False)
     tokenizer: Dict[str, Any] = Field(default_factory=dict, init=False)
     constrainer: Optional["OutputConstrainer"] = Field(
@@ -39,6 +41,7 @@ class Orchestrator(BaseModel):
         Returns:
             Orchestrator: The initialized instance.
         """
+        self.model = Small_LLM_Model(model_name=self.model_name)
         self.vocab = self.load_vocabulary_mapping(
             self.model.get_path_to_vocab_file()
         )
