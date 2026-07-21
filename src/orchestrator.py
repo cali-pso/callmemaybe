@@ -4,6 +4,7 @@ import re
 from typing import List, Dict, Tuple, Optional, Any, Generator
 from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 from src.models import FuncDefinition
+from src.errors import UnknownFunctionError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -110,9 +111,14 @@ class Orchestrator(BaseModel):
             functions=self.functions,
         )
         answer_ids = []
-        for token in generator.generate(full_prompt, self.constrainer):
-            answer_ids.append(token)
-        answer = self.model.decode(answer_ids)
+        try:
+            for token in generator.generate(full_prompt, self.constrainer):
+                answer_ids.append(token)
+            answer = self.model.decode(answer_ids)
+        except UnknownFunctionError:
+            return str(
+                '{\n\t"message":"Needed function was not found by model"\n}'
+            )
         return str(answer)
 
 
@@ -190,38 +196,42 @@ class GeneratorCls(BaseModel):
 
             logits = self.model.get_logits_from_input_ids(input_ids[0])
             logits_np = numpy.array(logits)
-            logits_filtered, context = constrainer.apply_constraints(
-                generated_text, logits_np
-            )
-            func_name, current_param, is_inside_string = context
-            generated_token_id = int(numpy.argmax(logits_filtered))
-            if generated_token_id == end_of_text_token:
-                break
-            generated_str = self.model.decode(generated_token_id)
+            try:
+                logits_filtered, context = constrainer.apply_constraints(
+                    generated_text, logits_np
+                )
+            except UnknownFunctionError as e:
+                raise e
+            else:
+                func_name, current_param, is_inside_string = context
+                generated_token_id = int(numpy.argmax(logits_filtered))
+                if generated_token_id == end_of_text_token:
+                    break
+                generated_str = self.model.decode(generated_token_id)
 
-            if brace_count != 0:
-                generated_text += str(skipped_str) + str(generated_str)
-                input_ids[0].append(generated_token_id)
+                if brace_count != 0:
+                    generated_text += str(skipped_str) + str(generated_str)
+                    input_ids[0].append(generated_token_id)
 
-                if "{" in generated_str:
-                    brace_count += 1
-                    if not json_has_started:
-                        json_has_started = True
-                if "}" in generated_str:
-                    brace_count -= 1
+                    if "{" in generated_str:
+                        brace_count += 1
+                        if not json_has_started:
+                            json_has_started = True
+                    if "}" in generated_str:
+                        brace_count -= 1
 
-                tokens_count += 1
-                print(generated_str, end="", flush=True)
-                yield generated_token_id
+                    tokens_count += 1
+                    print(generated_str, end="", flush=True)
+                    yield generated_token_id
 
-            if brace_count == 0 and json_has_started:
-                break
+                if brace_count == 0 and json_has_started:
+                    break
 
     def check_for_skip(
         self,
         text: str,
         brace_count: int,
-        context: Optional[Tuple[Optional[str], List[str], bool]]
+        context: Optional[Tuple[Optional[str], List[str], bool]],
     ) -> Any:
         """
         Determine if boilerplate JSON structuring can be safely fast-forwarded.
@@ -400,6 +410,8 @@ class OutputConstrainer(BaseModel):
                     elif param_type == "string" and is_inside_string:
                         return_np[~self.string_mask] = -(numpy.inf)
                         return (return_np, context)
+        elif func_name and func_name not in self.functions_dict:
+            raise UnknownFunctionError(func_name)
         return (return_np, context)
 
 

@@ -101,8 +101,10 @@ def main() -> None:
 
     except ParsingError as e:
         print(f"Error parsing: {e}")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+
+
+#   except Exception as e:
+#       print(f"Unexpected error: {e}")
 
 
 if __name__ == "__main__":
