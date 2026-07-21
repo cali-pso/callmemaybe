@@ -98,7 +98,7 @@ make run
 ```
 or
 ```bash
-make
+uv sync
 uv run python3 -m src
 ```
 
