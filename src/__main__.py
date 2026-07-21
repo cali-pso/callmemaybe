@@ -13,13 +13,6 @@ def setup_arg_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--model",
-        type=str,
-        default="Qwen/Qwen3-0.6B",
-        help="HuggingFace model ID to use (e.g., 'Qwen/Qwen2.5-0.5B').",
-    )
-
-    parser.add_argument(
         "--functions_definition",
         type=str,
         default="data/input/functions_definition.json",
@@ -54,7 +47,7 @@ def main() -> None:
 
         prompts = Parser.load_prompts(args.input)
         functions = Parser.load_functions(args.functions_definition)
-        orchestrator = Orchestrator(functions=functions, model_name=args.model)
+        orchestrator = Orchestrator(functions=functions, model_name="Qwen/Qwen3-0.6B")
 
         # 1. Initialize a list to hold all formatted output objects
         final_results = []
