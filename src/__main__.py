@@ -47,7 +47,9 @@ def main() -> None:
 
         prompts = Parser.load_prompts(args.input)
         functions = Parser.load_functions(args.functions_definition)
-        orchestrator = Orchestrator(functions=functions, model_name="Qwen/Qwen3-0.6B")
+        orchestrator = Orchestrator(
+            functions=functions, model_name="Qwen/Qwen3-0.6B"
+        )
 
         # 1. Initialize a list to hold all formatted output objects
         final_results = []
