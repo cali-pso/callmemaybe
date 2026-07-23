@@ -92,30 +92,4 @@ class Orchestrator(BaseModel):
         return id_to_string
 
     def generate_with_constraints(self, user_prompt: str) -> str:
-        """
-        Translate a natural language prompt into a strictly formatted JSON
-        function call.
-
-        Args:
-            user_prompt (str): The input request from the user.
-
-        Returns:
-            str: The final, valid JSON string containing function name
-            and arguments.
-        """
-        full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
-        generator = GeneratorCls(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            functions=self.functions,
-        )
-        answer_ids = []
-        try:
-            for token in generator.generate(full_prompt, self.constrainer):
-                answer_ids.append(token)
-            answer = self.model.decode(answer_ids)
-        except UnknownFunctionError:
-            return str(
-                '{\n\t"message":"Needed function was not found by model"\n}'
-            )
-        return str(answer)
+        pass

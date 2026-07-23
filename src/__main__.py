@@ -57,28 +57,7 @@ def main() -> None:
         print(f"Starting generation for {total_prompts} prompts...\n")
 
         for i, prompt_obj in enumerate(prompts, start=1):
-            print(f"[{i}/{total_prompts}] Translating: '{prompt_obj.prompt}'")
-
-            answer_str = orchestrator.generate_with_constraints(
-                prompt_obj.prompt
-            )
-            print(answer_str)
-            try:
-                parsed_answer = json.loads(answer_str.strip("\n"))
-
-                result_entry = {
-                    "prompt": prompt_obj.prompt,
-                    "name": parsed_answer.get("func_name", ""),
-                    "parameters": parsed_answer.get("parameters", {}),
-                }
-
-                final_results.append(result_entry)
-                print("SUCCESS")
-
-            except json.JSONDecodeError:
-                print("FAILED (Invalid JSON format)")
-            except Exception as e:
-                print(f"FAILED ({e})")
+            pass
 
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
