@@ -51,7 +51,6 @@ def main() -> None:
             functions=functions, model_name="Qwen/Qwen3-0.6B"
         )
 
-        # 1. Initialize a list to hold all formatted output objects
         final_results = []
         total_prompts = len(prompts)
 
@@ -81,14 +80,12 @@ def main() -> None:
             except Exception as e:
                 print(f"FAILED ({e})")
 
-        # Ensure output directory exists before saving
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
         print(f"\nWriting results to '{args.output}'...")
 
-        # 5. Write the final formatted list to the JSON file
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(final_results, f, indent=4)
 
@@ -96,10 +93,8 @@ def main() -> None:
 
     except ParsingError as e:
         print(f"Error parsing: {e}")
-
-
-#   except Exception as e:
-#       print(f"Unexpected error: {e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 
 if __name__ == "__main__":
