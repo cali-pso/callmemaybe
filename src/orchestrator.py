@@ -1,8 +1,11 @@
 import json
+import re
 import numpy
+import os
 from typing import List, Dict
 from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
+from jinja2 import Template
 
 MAX_TOKENS = 50
 
@@ -11,13 +14,22 @@ class Orchestrator:
     def __init__(self, functions: List) -> None:
         self.functions = functions
         self.model = Small_LLM_Model()
+        self.model_path = self.get_model_path(self.model)
         self.vocab = self.load_vocabulary_mapping(
-            self.model.get_path_to_vocab_file()
+            self.model_path + "vocab.json"
         )
         self.tokenizer = self.load_tokenizer(
-            self.model.get_path_to_tokenizer_file()
+            self.model_path + "tokenizer.json"
+        )
+        print(
+            f"vocab from tokenizer: {len(self.tokenizer['added_tokens']) + len(self.tokenizer['model']['vocab'])}"
         )
         self.constrainer = OutputConstrainer(self.vocab, self.model)
+
+    @staticmethod
+    def get_model_path(model: Small_LLM_Model) -> str:
+        tokenizer_path = model.get_path_to_tokenizer_file()
+        return os.path.dirname(tokenizer_path) + "/"
 
     @staticmethod
     def load_tokenizer(tokenizer_path: str) -> dict[str, str]:
@@ -28,6 +40,7 @@ class Orchestrator:
 
     @staticmethod
     def load_vocabulary_mapping(vocab_path: str) -> dict[int, str]:
+        print(vocab_path)
         with open(vocab_path, "r", encoding="utf-8") as f:
             vocab_json = json.load(f)
 
@@ -39,94 +52,121 @@ class Orchestrator:
 
     def generate_with_constraints(self, user_prompt: str) -> str:
         print(f"\n\nStarting generation process with {user_prompt}\n")
-        full_prompt = PromptMaker.build_prompt(user_prompt, self.functions)
-        generator = Generator(self.model, self.tokenizer)
-        answer_ids = []
-        for token in generator.generate(full_prompt, self.constrainer):
-            answer_ids.append(token)
-        answer = self.model.decode(answer_ids)
-        return answer
+        full_prompt = PromptMaker.build_prompt(
+            user_prompt,
+            self.functions,
+            self.model_path + "tokenizer_config.json",
+        )
+        generator = Generator(self.model, self.tokenizer, self.constrainer)
+        answer_trad = []
+        for choosen_trad in generator.generate(full_prompt):
+            answer_trad.append(choosen_trad)
+            print(choosen_trad, end="", flush=True)
+        return answer_trad
 
 
 class Generator:
-    def __init__(self, model, tokenizer) -> None:
+    def __init__(self, model, tokenizer, constrainer) -> None:
         self.model = model
         self.tokenizer = tokenizer
+        self.constrainer = constrainer
+        self.eos_token = self.tokenizer["added_tokens"][0]["id"]
 
-    def generate(self, prompt: str, constrainer) -> int:
-        input_ids = self.model.encode(prompt)
-        input_ids = input_ids.tolist()
-
-        end_of_text_token = self.tokenizer["added_tokens"][0]["id"]
-
-        generated_token = ""
-        generated_text = ""
+    def generate(self, prompt: str) -> int:
 
         json_has_started = False
         brace_count = 0
         tokens_count = 0
+        generated_text = ""
+        choosen_token = None
+        input_ids = self.model.encode(prompt)[0].tolist()
+
         while tokens_count <= MAX_TOKENS:
-            logits = self.model.get_logits_from_input_ids(input_ids[0])
-            logits_np = numpy.array(logits)
-            logits_filtered = constrainer.apply_constraints(
-                generated_text, logits_np
+            if choosen_token is not None:
+                input_ids.append(choosen_token)
+
+            logits = self.model.get_logits_from_input_ids(input_ids)
+            logits_filtered = self.constrainer.apply_constraints(
+                generated_text, logits
             )
-            generated_token = int(numpy.argmax(logits_filtered))
-            if generated_token == end_of_text_token:
+
+            choosen_token = numpy.argmax(logits_filtered)
+            choosen_trad = self.model.decode(choosen_token)
+
+            generated_text += choosen_trad
+
+            yield choosen_trad
+
+            if choosen_token == self.eos_token:
                 break
-            input_ids[0].append(generated_token)
-            generated_str = self.model.decode(generated_token)
-            generated_text += generated_str
-
-            if "{" in generated_str:
-                brace_count += 1
-                if not json_has_started:
-                    json_has_started = True
-            if "}" in generated_str:
-                brace_count -= 1
-
-            tokens_count += 1
-            yield generated_token
-
-            if brace_count == 0 and json_has_started:
-                break
+            else:
+                self.constrainer.update_state(choosen_trad)
 
 
 class OutputConstrainer:
     def __init__(self, vocab: Dict[int, str], model) -> None:
         self.vocab = vocab
-        self.vocab_size = len(vocab)
+        self.vocab_size = len(model.get_logits_from_input_ids([0]))
         self.model = model
+        self.state = "STATE_EXPECT_START"
+        self.masks = self.create_masks()
 
-        banned_str_list = ["`", "<think>", "</think>"]
+    def update_state(self, new_text: str) -> None:
+        if self.state == "STATE_EXPECT_START" and "{" in new_text:
+            self.state = "STATE_EXPECT_FN_NAME_KEY"
 
-        needed_tokens_str = ["{", "}", "\n"]
-        self.essential_tokens: Dict[str, int] = {
-            c: self.model.encode(c) for c in needed_tokens_str
+    def create_masks(self) -> Dict[str, numpy.array]:
+        start = self.get_mask(r"^[\{]$")
+        colon = self.get_mask(r"^[\s:]*$")
+        comma = self.get_mask(r"^[,]*$")
+        func_name_key = self.get_mask(r'^[\s\r"a-z]*$')
+        func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]*$')
+        param_key = self.get_mask(r'^[\s"parmetes]*$')
+        int_param = self.get_mask(r"^[0-9]*$")
+        float_param = self.get_mask(r"^[0-9.]*$")
+        string_param = self.get_mask(
+            r'^[\sA-Za-z0-9~`!@#\$%\^&\*\(\)_\+-=\{\}\[\]\|\\:;"\'<,>\.\?/]*$'
+        )
+        end = self.get_mask(r"^\}\r$")
+
+        masks = {
+            "STATE_EXPECT_START": start,
+            "STATE_EXPECT_COLON": colon,
+            "STATE_EXPECT_COMMA": comma,
+            "STATE_EXPECT_FN_NAME_KEY": func_name_key,
+            "STATE_EXPECT_FN_NAME_VALUE": func_name_val,
+            "STATE_EXPECT_PARAM_KEY": param_key,
+            "STATE_EXPECT_INT_PARAM": int_param,
+            "STATE_EXPECT_FLOAT_PARAM": float_param,
+            "STATE_EXPECT_STRING_PARAM": string_param,
+            "STATE_EXPECT_END": end,
         }
+        return masks
 
-        self.default_mask = numpy.ones(151936, dtype=bool)
-        for token_id, token_str in self.vocab.items():
-            for s in banned_str_list:
-                if s in token_str:
-                    self.default_mask[token_id] = False
-        self.all_false_mask = numpy.zeros(151936, dtype=bool)
+    def get_mask(self, regex_pattern: str) -> numpy.ndarray:
+        """
+        Creates a boolean NumPy array where True indicates the token
+        is built entirely from the allowed character set.
+        """
+        mask = numpy.zeros(self.vocab_size, dtype=bool)
+
+        compiled_regex = re.compile(regex_pattern)
+
+        for token_id_str, token_str in self.vocab.items():
+            token_id = int(token_id_str)
+
+            clean_token = token_str.replace("Ġ", " ")
+
+            if compiled_regex.fullmatch(clean_token):
+                mask[token_id] = True
+
+        return mask
 
     def apply_constraints(
-        self, current_text: str, logits_np: numpy.ndarray
-    ) -> numpy.ndarray:
-        return_np = logits_np
-
-        if len(current_text) == 0:
-            mask = self.all_false_mask.copy()
-            mask[self.essential_tokens["{"]] = True
-        elif current_text[-1] in ["{", "}"]:
-            mask = self.all_false_mask.copy()
-            mask[self.essential_tokens["\n"]] = True
-        else:
-            mask = self.default_mask.copy()
-
-        return_np[~mask] = -(numpy.inf)
+        self, current_text: str, logits: list[float]
+    ) -> list[float]:
+        return_np = numpy.asarray(logits)
+        return_np[~self.masks[self.state]] = -(numpy.inf)
         return return_np
 
 
@@ -136,34 +176,62 @@ class PromptMaker:
 
     @staticmethod
     def get_functions_as_prompt(functions: List[FuncDefinition]) -> str:
-        formatted = ""
-
-        formatted += "Available functions\n"
+        """
+        Formats the available functions into a clear, readable list for the LLM.
+        """
+        formatted = "AVAILABLE FUNCTIONS:\n"
         for func in functions:
-            formatted += f"- {func.name}: {func.description}\n"
+            formatted += f"- Function: {func.name}\n"
+            formatted += f"  Description: {func.description}\n"
             formatted += "  Parameters:\n"
             for param_name, param_type_obj in func.parameters.items():
-                formatted += f"     - {param_name} ({param_type_obj.type})\n"
-
+                formatted += f"    * {param_name} ({param_type_obj.type})\n"
         formatted += "\n"
         return formatted
 
     @staticmethod
-    def build_prompt(user_prompt: str, functions: List[FuncDefinition]) -> str:
-        final = ""
+    def get_messages(
+        user_prompt: str, functions: List[FuncDefinition]
+    ) -> dict[str, str]:
+        """
+        Builds the system and user messages with a strict schema definition.
+        """
+        sys = "You are an intelligent API orchestrator. Your ONLY job is to route user requests to the appropriate function.\n\n"
+        sys += "OUTPUT FORMAT:\n"
+        sys += "You must respond ONLY with a raw JSON object matching this exact schema.\n"
+        sys += "{ "
+        sys += '"func_name": "the_name_of_the_function", '
+        sys += '"parameters": { '
+        sys += '"param1": "value1" '
+        sys += "} "
+        sys += "}\n\n"
+        sys += PromptMaker.get_functions_as_prompt(functions)
+        messages = [
+            {"role": "system", "content": f"{sys}"},
+            {"role": "user", "content": f"{user_prompt.prompt}"},
+        ]
+        return messages
 
-        final += "<|im_start|>system\n"
-        final += "You are an expert that translates natural language requests"
-        final += " into strict JSON function calls.\n"
-        final += "You must NOT answer the question directly. You must ONLY"
-        final += (
-            " output a valid JSON object choosing the correct function.\n\n"
+    @staticmethod
+    def build_prompt(
+        user_prompt: str,
+        functions: List[FuncDefinition],
+        tokenizer_config_path: str,
+    ) -> str:
+
+        with open(tokenizer_config_path, "r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+
+        raw_template = config.get(
+            "chat_template",
+            "{% for message in messages %}{{ message['role'] + ': ' + message['content'] + '\\n' }}{% endfor %}",
+        )
+        messages = PromptMaker.get_messages(user_prompt, functions)
+
+        jinja_template = Template(raw_template)
+        formatted_prompt = jinja_template.render(
+            messages=messages, add_generation_prompt=True
         )
 
-        final += PromptMaker.get_functions_as_prompt(functions)
-        final += "<|im_end|>\n"
-
-        final += f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-        final += "<|im_start|>assistant\n"
-
-        return final
+        print(formatted_prompt)
+        return formatted_prompt

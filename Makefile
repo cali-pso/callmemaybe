@@ -3,13 +3,15 @@ FLAKE = uv run flake8
 MYPY = uv run mypy
 SRC = src
 
-export HF_HUB_CACHE = /dev/shm/cmb/venv/hfhc
+export HF_HUB_OFFLINE=1
+export OFFLINE_MODE=True
 
 install:
 	uv -n sync
-	uv run hf download Qwen/Qwen3-0.6B --cache-dir /dev/shm/cmb/venv/hfhc
+	uv run hf download Qwen/Qwen3-0.6B
 
 run:
+	HF_HUB_OFFLINE=1
 	$(PYTHON) -m $(SRC)
 
 debug:
