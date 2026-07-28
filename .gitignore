@@ -1,0 +1,5 @@
+__pycache__
+moulinette*
+.*
+uv.lock
+data/output

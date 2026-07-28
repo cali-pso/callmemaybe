@@ -21,10 +21,9 @@ class Orchestrator:
         self.tokenizer = self.load_tokenizer(
             self.model_path + "tokenizer.json"
         )
-        print(
-            f"vocab from tokenizer: {len(self.tokenizer['added_tokens']) + len(self.tokenizer['model']['vocab'])}"
+        self.constrainer = OutputConstrainer(
+            vocab=self.vocab, model=self.model
         )
-        self.constrainer = OutputConstrainer(self.vocab, self.model)
 
     @staticmethod
     def get_model_path(model: Small_LLM_Model) -> str:
@@ -110,24 +109,74 @@ class OutputConstrainer:
         self.model = model
         self.state = "STATE_EXPECT_START"
         self.masks = self.create_masks()
+        self.quotes = 0
+        self.brackets = 0
+        self.done_func_name = False
+        self.done_params = False
 
     def update_state(self, new_text: str) -> None:
-        if self.state == "STATE_EXPECT_START" and "{" in new_text:
+        if (
+            self.state == "STATE_EXPECT_START"
+            and "{" in new_text
+            and self.brackets == 0
+        ):
+            self.brackets += 1
             self.state = "STATE_EXPECT_FN_NAME_KEY"
+        elif self.state == "STATE_EXPECT_FN_NAME_KEY":
+            if '"' in new_text:
+                self.quotes += 1
+            if self.quotes == 2:
+                self.quotes = 0
+                self.state = "STATE_EXPECT_COLON"
+        elif (
+            self.state == "STATE_EXPECT_COLON"
+            and ":" in new_text
+            and not self.done_func_name
+        ):
+            self.state = "STATE_EXPECT_FN_NAME_VALUE"
+        elif self.state == "STATE_EXPECT_FN_NAME_VALUE":
+            if '"' in new_text:
+                self.quotes += 1
+            if self.quotes == 2:
+                self.quotes = 0
+                self.done_func_name = True
+                self.state = "STATE_EXPECT_COMMA"
+        elif self.state == "STATE_EXPECT_COMMA" and "," in new_text:
+            self.state = "STATE_EXPECT_PARAM_KEY"
+        elif self.state == "STATE_EXPECT_PARAM_KEY":
+            if '"' in new_text:
+                self.quotes += 1
+            if self.quotes == 2:
+                self.quotes = 0
+                self.state = "STATE_EXPECT_COLON"
+        elif (
+            self.state == "STATE_EXPECT_COLON"
+            and ":" in new_text
+            and self.done_func_name
+        ):
+            self.state = "STATE_EXPECT_START"
+        elif (
+            self.state == "STATE_EXPECT_START"
+            and "{" in new_text
+            and self.brackets == 1
+        ):
+            self.brackets += 1
+            self.state = "STATE_EXPECT_PARAM_NAME"
 
     def create_masks(self) -> Dict[str, numpy.array]:
-        start = self.get_mask(r"^[\{]$")
-        colon = self.get_mask(r"^[\s:]*$")
-        comma = self.get_mask(r"^[,]*$")
-        func_name_key = self.get_mask(r'^[\s\r"a-z]*$')
-        func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]*$')
-        param_key = self.get_mask(r'^[\s"parmetes]*$')
-        int_param = self.get_mask(r"^[0-9]*$")
-        float_param = self.get_mask(r"^[0-9.]*$")
+        start = self.get_mask(r"^\s?[\{]$")
+        colon = self.get_mask(r"^:\s?$")
+        comma = self.get_mask(r"^[,]$")
+        func_name_key = self.get_mask(r'^[\s"func_ame]+$')
+        func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]+$')
+        param_key = self.get_mask(r'^[\s"parmetes]+$')
+        int_param = self.get_mask(r"^[0-9]+$")
+        float_param = self.get_mask(r"^[0-9.]+$")
         string_param = self.get_mask(
-            r'^[\sA-Za-z0-9~`!@#\$%\^&\*\(\)_\+-=\{\}\[\]\|\\:;"\'<,>\.\?/]*$'
+            r'^[\sA-Za-z0-9~`!@#\$%\^&\*\(\)_\+-=\{\}\[\]\|\\:;"\'<,>\.\?/]+$'
         )
-        end = self.get_mask(r"^\}\r$")
+        param_name = self.get_mask(r'^[\s"a-zA-Z0-9_]+$')
+        end = self.get_mask(r"^[\}]$")
 
         masks = {
             "STATE_EXPECT_START": start,
@@ -139,6 +188,7 @@ class OutputConstrainer:
             "STATE_EXPECT_INT_PARAM": int_param,
             "STATE_EXPECT_FLOAT_PARAM": float_param,
             "STATE_EXPECT_STRING_PARAM": string_param,
+            "STATE_EXPECT_PARAM_NAME": param_name,
             "STATE_EXPECT_END": end,
         }
         return masks
