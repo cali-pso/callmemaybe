@@ -73,13 +73,12 @@ class Generator:
 
     def generate(self, prompt: str) -> int:
 
-        json_has_started = False
-        brace_count = 0
         tokens_count = 0
         generated_text = ""
         choosen_token = None
         input_ids = self.model.encode(prompt)[0].tolist()
 
+        self.constrainer.reset_state()
         while tokens_count <= MAX_TOKENS and self.constrainer.state != "STATE_FINISHED":
             if choosen_token is not None:
                 input_ids.append(choosen_token)
@@ -113,13 +112,8 @@ class OutputConstrainer:
         self.vocab = vocab
         self.vocab_size = len(model.get_logits_from_input_ids([0]))
         self.model = model
-        self.state = "STATE_EXPECT_START"
         self.masks = self.create_masks()
-        self.quotes = 0
-        self.brackets = 0
-        self.done_func_name = False
-        self.in_params = False
-        self.done_params = 0
+        self.reset_state()
 
     def update_state(self, new_text: str, full_text: str) -> None:
 
@@ -236,6 +230,14 @@ class OutputConstrainer:
             if self.brackets == 0:
                 self.state = "STATE_FINISHED"
 
+    def reset_state(self) -> None:
+        self.state = "STATE_EXPECT_START"
+        self.brackets = 0
+        self.quotes = 0
+        self.done_func_name = False
+        self.done_params = 0
+        self.in_params = False
+
     def create_masks(self) -> Dict[str, numpy.array]:
         start = self.get_mask(r"^\s?[\{]$")
         colon = self.get_mask(r"^:\s?$")
@@ -322,11 +324,11 @@ class PromptMaker:
         sys = "You are an intelligent API orchestrator. Your ONLY job is to route user requests to the appropriate function.\n\n"
         sys += "OUTPUT FORMAT:\n"
         sys += "You must respond ONLY with a raw JSON object matching this exact schema.\n"
-        sys += "{ "
+        sys += "{"
         sys += '"func_name": "the_name_of_the_function", '
-        sys += '"parameters": { '
-        sys += '"param1": "value1" '
-        sys += "} "
+        sys += '"parameters": {'
+        sys += '"param1": "value1"'
+        sys += "}"
         sys += "}\n\n"
         sys += PromptMaker.get_functions_as_prompt(functions)
         messages = [
@@ -356,5 +358,4 @@ class PromptMaker:
             messages=messages, add_generation_prompt=True
         )
 
-        print(formatted_prompt)
         return formatted_prompt

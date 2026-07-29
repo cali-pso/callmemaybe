@@ -57,8 +57,13 @@ def main() -> None:
         print(f"Starting generation for {total_prompts} prompts...\n")
 
         for i, prompt_obj in enumerate(prompts, start=1):
-            print(f"Starting generation with {prompt_obj}")
-            orchestrator.generate_with_constraints(prompt_obj)
+            result = orchestrator.generate_with_constraints(prompt_obj)
+            try:
+                json.loads("["+result+"]")
+            except Exception:
+                print("\n\nJSON validation failed")
+            else:
+                print("\n\nJSON validated successfully")
 
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
