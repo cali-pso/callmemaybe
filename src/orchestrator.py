@@ -22,7 +22,7 @@ class Orchestrator:
             self.model_path + "tokenizer.json"
         )
         self.constrainer = OutputConstrainer(
-            vocab=self.vocab, model=self.model
+            vocab=self.vocab, model=self.model, functions=self.functions
         )
 
     @staticmethod
@@ -80,7 +80,7 @@ class Generator:
         choosen_token = None
         input_ids = self.model.encode(prompt)[0].tolist()
 
-        while tokens_count <= MAX_TOKENS:
+        while tokens_count <= MAX_TOKENS and self.constrainer.state != "STATE_FINISHED":
             if choosen_token is not None:
                 input_ids.append(choosen_token)
 
@@ -99,11 +99,17 @@ class Generator:
             if choosen_token == self.eos_token:
                 break
             else:
-                self.constrainer.update_state(choosen_trad)
+                self.constrainer.update_state(choosen_trad, generated_text)
 
 
 class OutputConstrainer:
-    def __init__(self, vocab: Dict[int, str], model) -> None:
+    def __init__(
+        self,
+        vocab: Dict[int, str],
+        model: Small_LLM_Model,
+        functions: List[FuncDefinition],
+    ) -> None:
+        self.functions = {function.name: function for function in functions}
         self.vocab = vocab
         self.vocab_size = len(model.get_logits_from_input_ids([0]))
         self.model = model
@@ -112,9 +118,11 @@ class OutputConstrainer:
         self.quotes = 0
         self.brackets = 0
         self.done_func_name = False
-        self.done_params = False
+        self.in_params = False
+        self.done_params = 0
 
-    def update_state(self, new_text: str) -> None:
+    def update_state(self, new_text: str, full_text: str) -> None:
+
         if (
             self.state == "STATE_EXPECT_START"
             and "{" in new_text
@@ -122,39 +130,52 @@ class OutputConstrainer:
         ):
             self.brackets += 1
             self.state = "STATE_EXPECT_FN_NAME_KEY"
+
         elif self.state == "STATE_EXPECT_FN_NAME_KEY":
             if '"' in new_text:
                 self.quotes += 1
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COLON"
+
         elif (
             self.state == "STATE_EXPECT_COLON"
             and ":" in new_text
             and not self.done_func_name
         ):
             self.state = "STATE_EXPECT_FN_NAME_VALUE"
+
         elif self.state == "STATE_EXPECT_FN_NAME_VALUE":
             if '"' in new_text:
                 self.quotes += 1
             if self.quotes == 2:
                 self.quotes = 0
-                self.done_func_name = True
                 self.state = "STATE_EXPECT_COMMA"
-        elif self.state == "STATE_EXPECT_COMMA" and "," in new_text:
+
+        elif (
+            self.state == "STATE_EXPECT_COMMA"
+            and "," in new_text
+            and not self.done_func_name
+        ):
+            self.done_func_name = True
             self.state = "STATE_EXPECT_PARAM_KEY"
+
         elif self.state == "STATE_EXPECT_PARAM_KEY":
             if '"' in new_text:
                 self.quotes += 1
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COLON"
+
         elif (
             self.state == "STATE_EXPECT_COLON"
             and ":" in new_text
             and self.done_func_name
+            and not self.in_params
         ):
+            self.in_params = True
             self.state = "STATE_EXPECT_START"
+
         elif (
             self.state == "STATE_EXPECT_START"
             and "{" in new_text
@@ -163,6 +184,58 @@ class OutputConstrainer:
             self.brackets += 1
             self.state = "STATE_EXPECT_PARAM_NAME"
 
+        elif self.state == "STATE_EXPECT_PARAM_NAME":
+            if '"' in new_text:
+                self.quotes += 1
+            if self.quotes == 2:
+                self.quotes = 0
+                self.state = "STATE_EXPECT_COLON"
+
+        elif self.state == "STATE_EXPECT_COLON" and ":" in new_text:
+            self.function = self.functions[full_text.split('"')[3]]
+            param_type = list(self.function.parameters.values())[
+                self.done_params
+            ].type
+            if param_type == "number" or param_type == "int":
+                self.state = "STATE_EXPECT_INT_PARAM"
+            elif param_type == "float":
+                self.state = "STATE_EXPECT_FLOAT_PARAM"
+            elif param_type == "string":
+                self.state = "STATE_EXPECT_STRING_PARAM"
+
+        elif self.state in [
+            "STATE_EXPECT_INT_PARAM",
+            "STATE_EXPECT_FLOAT_PARAM",
+            "STATE_EXPECT_NUMBER_PARAM",
+        ] and ("," in new_text or "}" in new_text):
+            self.done_params += 1
+            if (
+                self.done_params < len(self.function.parameters)
+                and "," in new_text
+            ):
+                self.state = "STATE_EXPECT_PARAM_NAME"
+            elif "}" in new_text:
+                self.brackets -= 1
+                self.state = "STATE_EXPECT_END"
+
+        elif self.state == "STATE_EXPECT_STRING_PARAM":
+            if '"' in new_text:
+                self.quotes += 1
+            if self.quotes == 2 and ("," in new_text or "}" in new_text):
+                self.quotes = 0
+                self.done_params += 1
+                if self.done_params < len(self.function.parameters) and "," in new_text:
+                    self.state = "STATE_EXPECT_PARAM_NAME"
+                elif "}" in new_text:
+                    self.brackets -= 1
+                    self.state = "STATE_EXPECT_END"
+
+        elif self.state == "STATE_EXPECT_END":
+            if "}" in new_text:
+                self.brackets -= 1
+            if self.brackets == 0:
+                self.state = "STATE_FINISHED"
+
     def create_masks(self) -> Dict[str, numpy.array]:
         start = self.get_mask(r"^\s?[\{]$")
         colon = self.get_mask(r"^:\s?$")
@@ -170,8 +243,8 @@ class OutputConstrainer:
         func_name_key = self.get_mask(r'^[\s"func_ame]+$')
         func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]+$')
         param_key = self.get_mask(r'^[\s"parmetes]+$')
-        int_param = self.get_mask(r"^[0-9]+$")
-        float_param = self.get_mask(r"^[0-9.]+$")
+        int_param = self.get_mask(r"^[\s0-9,\}]+$")
+        float_param = self.get_mask(r"^[\s0-9.,\}]+$")
         string_param = self.get_mask(
             r'^[\sA-Za-z0-9~`!@#\$%\^&\*\(\)_\+-=\{\}\[\]\|\\:;"\'<,>\.\?/]+$'
         )
