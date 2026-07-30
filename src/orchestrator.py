@@ -79,7 +79,10 @@ class Generator:
         input_ids = self.model.encode(prompt)[0].tolist()
 
         self.constrainer.reset_state()
-        while tokens_count <= MAX_TOKENS and self.constrainer.state != "STATE_FINISHED":
+        while (
+            tokens_count <= MAX_TOKENS
+            and self.constrainer.state != "STATE_FINISHED"
+        ):
             if choosen_token is not None:
                 input_ids.append(choosen_token)
 
@@ -127,7 +130,7 @@ class OutputConstrainer:
 
         elif self.state == "STATE_EXPECT_FN_NAME_KEY":
             if '"' in new_text:
-                self.quotes += 1
+                self.quotes += new_text.count('"')
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COLON"
@@ -141,7 +144,7 @@ class OutputConstrainer:
 
         elif self.state == "STATE_EXPECT_FN_NAME_VALUE":
             if '"' in new_text:
-                self.quotes += 1
+                self.quotes += new_text.count('"')
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COMMA"
@@ -156,7 +159,7 @@ class OutputConstrainer:
 
         elif self.state == "STATE_EXPECT_PARAM_KEY":
             if '"' in new_text:
-                self.quotes += 1
+                self.quotes += new_text.count('"')
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COLON"
@@ -180,7 +183,7 @@ class OutputConstrainer:
 
         elif self.state == "STATE_EXPECT_PARAM_NAME":
             if '"' in new_text:
-                self.quotes += 1
+                self.quotes += new_text.count('"')
             if self.quotes == 2:
                 self.quotes = 0
                 self.state = "STATE_EXPECT_COLON"
@@ -214,14 +217,20 @@ class OutputConstrainer:
 
         elif self.state == "STATE_EXPECT_STRING_PARAM":
             if '"' in new_text:
-                self.quotes += 1
-            if self.quotes == 2 and ("," in new_text or "}" in new_text):
+                self.quotes += new_text.count('"')
+            if self.quotes == 2 and (
+                "," in new_text or "}" in new_text or " " in new_text
+            ):
                 self.quotes = 0
                 self.done_params += 1
-                if self.done_params < len(self.function.parameters) and "," in new_text:
+                if (
+                    self.done_params < len(self.function.parameters)
+                    and "," in new_text
+                ):
                     self.state = "STATE_EXPECT_PARAM_NAME"
-                elif "}" in new_text:
-                    self.brackets -= 1
+                elif "}" in new_text or " " in new_text:
+                    if "}" in new_text:
+                        self.brackets -= 1
                     self.state = "STATE_EXPECT_END"
 
         elif self.state == "STATE_EXPECT_END":
