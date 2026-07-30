@@ -57,9 +57,9 @@ class Orchestrator:
             self.model_path + "tokenizer_config.json",
         )
         generator = Generator(self.model, self.tokenizer, self.constrainer)
-        answer_trad = []
+        answer_trad = ""
         for choosen_trad in generator.generate(full_prompt):
-            answer_trad.append(choosen_trad)
+            answer_trad += choosen_trad
             print(choosen_trad, end="", flush=True)
         return answer_trad
 
@@ -239,7 +239,7 @@ class OutputConstrainer:
         self.in_params = False
 
     def create_masks(self) -> Dict[str, numpy.array]:
-        start = self.get_mask(r"^\s?[\{]$")
+        start = self.get_mask(r"^[\{]$")
         colon = self.get_mask(r"^:\s?$")
         comma = self.get_mask(r"^[,]$")
         func_name_key = self.get_mask(r'^[\s"func_ame]+$')

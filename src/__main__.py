@@ -59,9 +59,10 @@ def main() -> None:
         for i, prompt_obj in enumerate(prompts, start=1):
             result = orchestrator.generate_with_constraints(prompt_obj)
             try:
-                json.loads("["+result+"]")
-            except Exception:
-                print("\n\nJSON validation failed")
+                json.loads(result)
+                final_results.append(result)
+            except Exception as e:
+                raise e
             else:
                 print("\n\nJSON validated successfully")
 
