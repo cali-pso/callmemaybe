@@ -5,6 +5,7 @@ import os
 from typing import List, Dict
 from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
+from src.errors import UnknownFunctionError
 from jinja2 import Template
 
 MAX_TOKENS = 50
@@ -23,6 +24,9 @@ class Orchestrator:
         )
         self.constrainer = OutputConstrainer(
             vocab=self.vocab, model=self.model, functions=self.functions
+        )
+        self.generator = Generator(
+            self.model, self.tokenizer, self.constrainer
         )
 
     @staticmethod
@@ -56,9 +60,8 @@ class Orchestrator:
             self.functions,
             self.model_path + "tokenizer_config.json",
         )
-        generator = Generator(self.model, self.tokenizer, self.constrainer)
         answer_trad = ""
-        for choosen_trad in generator.generate(full_prompt):
+        for choosen_trad in self.generator.generate(full_prompt):
             answer_trad += choosen_trad
             print(choosen_trad, end="", flush=True)
         return answer_trad
@@ -92,7 +95,9 @@ class Generator:
             )
 
             choosen_token = numpy.argmax(logits_filtered)
-            choosen_trad = self.model.decode(choosen_token)
+            choosen_trad = self.constrainer.vocab[int(choosen_token)].replace(
+                "Ġ", " "
+            )
 
             generated_text += choosen_trad
 
@@ -147,6 +152,11 @@ class OutputConstrainer:
                 self.quotes += new_text.count('"')
             if self.quotes == 2:
                 self.quotes = 0
+                try:
+                    self.function = self.functions[full_text.split('"')[3]]
+                    self.function_params = list(self.function.parameters.values())
+                except Exception:
+                    raise UnknownFunctionError()
                 self.state = "STATE_EXPECT_COMMA"
 
         elif (
@@ -189,13 +199,10 @@ class OutputConstrainer:
                 self.state = "STATE_EXPECT_COLON"
 
         elif self.state == "STATE_EXPECT_COLON" and ":" in new_text:
-            self.function = self.functions[full_text.split('"')[3]]
-            param_type = list(self.function.parameters.values())[
-                self.done_params
-            ].type
-            if param_type == "number" or param_type == "int":
+            param_type = self.function_params[self.done_params].type
+            if param_type == "integer":
                 self.state = "STATE_EXPECT_INT_PARAM"
-            elif param_type == "float":
+            elif param_type == "number" or param_type == "float":
                 self.state = "STATE_EXPECT_FLOAT_PARAM"
             elif param_type == "string":
                 self.state = "STATE_EXPECT_STRING_PARAM"
@@ -246,12 +253,14 @@ class OutputConstrainer:
         self.done_func_name = False
         self.done_params = 0
         self.in_params = False
+        self.function = None
+        self.function_params = None
 
     def create_masks(self) -> Dict[str, numpy.array]:
         start = self.get_mask(r"^[\{]$")
         colon = self.get_mask(r"^:\s?$")
         comma = self.get_mask(r"^[,]$")
-        func_name_key = self.get_mask(r'^[\s"func_ame]+$')
+        func_name_key = self.get_mask(r'^[\s"name]+$')
         func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]+$')
         param_key = self.get_mask(r'^[\s"parmetes]+$')
         int_param = self.get_mask(r"^[\s0-9,\}]+$")
@@ -292,14 +301,17 @@ class OutputConstrainer:
             clean_token = token_str.replace("Ġ", " ")
 
             if compiled_regex.fullmatch(clean_token):
-                mask[token_id] = True
+                if "\\" in token_str and "\\\\" not in token_str:
+                    pass
+                else:
+                    mask[token_id] = True
 
         return mask
 
     def apply_constraints(
         self, current_text: str, logits: list[float]
     ) -> list[float]:
-        return_np = numpy.asarray(logits)
+        return_np = numpy.array(logits, dtype=numpy.float32)
         return_np[~self.masks[self.state]] = -(numpy.inf)
         return return_np
 
@@ -313,14 +325,12 @@ class PromptMaker:
         """
         Formats the available functions into a clear, readable list for the LLM.
         """
-        formatted = "AVAILABLE FUNCTIONS:\n"
+        formatted = "Functions:"
         for func in functions:
-            formatted += f"- Function: {func.name}\n"
-            formatted += f"  Description: {func.description}\n"
-            formatted += "  Parameters:\n"
+            # Use ultra-compact formatting
+            formatted += f"{func.name}:{func.description}|Args:"
             for param_name, param_type_obj in func.parameters.items():
-                formatted += f"    * {param_name} ({param_type_obj.type})\n"
-        formatted += "\n"
+                formatted += f"{param_name}({param_type_obj.type}),"
         return formatted
 
     @staticmethod
@@ -330,15 +340,14 @@ class PromptMaker:
         """
         Builds the system and user messages with a strict schema definition.
         """
-        sys = "You are an intelligent API orchestrator. Your ONLY job is to route user requests to the appropriate function.\n\n"
-        sys += "OUTPUT FORMAT:\n"
-        sys += "You must respond ONLY with a raw JSON object matching this exact schema.\n"
+        sys = "Route user requests to the appropriate function.\n"
+        sys += "OUTPUT FORMAT:"
         sys += "{"
-        sys += '"func_name": "the_name_of_the_function", '
+        sys += '"name": "function_name", '
         sys += '"parameters": {'
         sys += '"param1": "value1"'
         sys += "}"
-        sys += "}\n\n"
+        sys += "}\n"
         sys += PromptMaker.get_functions_as_prompt(functions)
         messages = [
             {"role": "system", "content": f"{sys}"},

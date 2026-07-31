@@ -1,7 +1,7 @@
 import argparse
 import os
 import json
-from src.errors import ParsingError
+from src.errors import ParsingError, UnknownFunctionError
 from src.parser import Parser
 from src.orchestrator import Orchestrator
 
@@ -57,12 +57,19 @@ def main() -> None:
         print(f"Starting generation for {total_prompts} prompts...\n")
 
         for i, prompt_obj in enumerate(prompts, start=1):
-            result = orchestrator.generate_with_constraints(prompt_obj)
             try:
-                json.loads(result)
-                final_results.append(result)
-            except Exception as e:
-                raise e
+                result = orchestrator.generate_with_constraints(prompt_obj)
+                json_result = json.loads(result)
+                formatted_result = {
+                    "prompt": prompt_obj.prompt, 
+                    "name": json_result.get("name"),
+                    "parameters": json_result.get("parameters", {})
+                }
+                final_results.append(formatted_result)
+            except UnknownFunctionError:
+                print("\n\nModel failed to find appropriate function.")
+            except json.JSONDecodeError as e:
+                print(f"\n\nJSON validation failed: {e}")
             else:
                 print("\n\nJSON validated successfully")
 
