@@ -47,31 +47,14 @@ def main() -> None:
 
         prompts = Parser.load_prompts(args.input)
         functions = Parser.load_functions(args.functions_definition)
-        orchestrator = Orchestrator(
-            functions=functions
-            )
+        orchestrator = Orchestrator(functions=functions)
 
         final_results = []
         total_prompts = len(prompts)
-
-        print(f"Starting generation for {total_prompts} prompts...\n")
-
-        for i, prompt_obj in enumerate(prompts, start=1):
-            try:
-                result = orchestrator.generate_with_constraints(prompt_obj)
-                json_result = json.loads(result)
-                formatted_result = {
-                    "prompt": prompt_obj.prompt, 
-                    "name": json_result.get("name"),
-                    "parameters": json_result.get("parameters", {})
-                }
-                final_results.append(formatted_result)
-            except UnknownFunctionError:
-                print("\n\nModel failed to find appropriate function.")
-            except json.JSONDecodeError as e:
-                print(f"\n\nJSON validation failed: {e}")
-            else:
-                print("\n\nJSON validated successfully")
+        padded_ids = orchestrator.get_padded_ids(prompts)
+        batch_results = orchestrator.generate_with_constraints_batched(
+            padded_ids
+        )
 
         output_dir = os.path.dirname(args.output)
         if output_dir and not os.path.exists(output_dir):
@@ -79,15 +62,32 @@ def main() -> None:
 
         print(f"\nWriting results to '{args.output}'...")
 
+        formatted_results = []
+        for prompt_obj, raw_result in zip(prompts, batch_results):
+            try:
+                parsed_json = json.loads(raw_result)
+                formatted_results.append(
+                    {
+                        "prompt": prompt_obj.prompt,
+                        "name": parsed_json.get("name"),
+                        "parameters": parsed_json.get("parameters", {}),
+                    }
+                )
+            except json.JSONDecodeError as e:
+                print(
+                    "JSON validation failed for prompt",
+                    f"'{prompt_obj.prompt}': {e}",
+                )
+
         with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(final_results, f, indent=4)
+            json.dump(formatted_results, f, indent=4)
 
         print("Done.")
 
     except ParsingError as e:
         print(f"Error parsing: {e}")
-    except Exception as e:
-        print(f"An error occured: {e}")
+    # except Exception as e:
+    #   print(f"An error occured: {e}")
 
 
 if __name__ == "__main__":
