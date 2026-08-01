@@ -1,65 +1,66 @@
+import json
+from jinja2 import Template
 from typing import List
-from pydantic import BaseModel
 from src.models import FuncDefinition
 
 
-class PromptMaker(BaseModel):
-    """
-    Utility class dedicated to assembling instructions and schemas.
-    """
+class PromptMaker:
+    def __init__(self) -> None:
+        pass
 
     @staticmethod
     def get_functions_as_prompt(functions: List[FuncDefinition]) -> str:
         """
-        Serialize available function metadata into a readable string block.
-
-        Args:
-            functions (List[FuncDefinition]): List of functions to format.
-
-        Returns:
-            str: A formatted block mapping functions to their descriptions
-            and parameters.
+        Formats the available functions into a readable list for the LLM.
         """
-        formatted = ""
-
-        formatted += "Available functions\n"
+        formatted = "Functions:"
         for func in functions:
-            formatted += f"- {func.name}: {func.description}\n"
-            formatted += "  Parameters:\n"
+            formatted += f"{func.name}:{func.description}|Args:"
             for param_name, param_type_obj in func.parameters.items():
-                formatted += f"     - {param_name} ({param_type_obj.type})\n"
-
-        formatted += "\n"
+                formatted += f"{param_name}({param_type_obj.type}),"
         return formatted
 
     @staticmethod
-    def build_prompt(user_prompt: str, functions: List[FuncDefinition]) -> str:
+    def get_messages(
+        user_prompt: str, functions: List[FuncDefinition]
+    ) -> dict[str, str]:
         """
-        Wrap the user's intent and the tools schema inside standard chat
-        templates.
-
-        Args:
-            user_prompt (str): The query input by the user.
-            functions (List[FuncDefinition]): List of allowed functions.
-
-        Returns:
-            str: The final templated prompt formatted for optimal
-            instruction following.
+        Builds the system and user messages with a strict schema definition.
         """
-        final = ""
+        sys = "Route user requests to the appropriate function.\n"
+        sys += "OUTPUT FORMAT:"
+        sys += "{"
+        sys += '"name": "function_name", '
+        sys += '"parameters": {'
+        sys += '"param1": "value1"'
+        sys += "}"
+        sys += "}\n"
+        sys += PromptMaker.get_functions_as_prompt(functions)
+        messages = [
+            {"role": "system", "content": f"{sys}"},
+            {"role": "user", "content": f"{user_prompt.prompt}"},
+        ]
+        return messages
 
-        final += "<|im_start|>system\n"
-        final += "You are an expert that translates natural language requests"
-        final += " into strict JSON function calls.\n"
-        final += "You must NOT answer the question directly. You must ONLY"
-        final += (
-            " output a valid JSON object choosing the correct function.\n\n"
+    @staticmethod
+    def build_prompt(
+        user_prompt: str,
+        functions: List[FuncDefinition],
+        tokenizer_config_path: str,
+    ) -> str:
+
+        with open(tokenizer_config_path, "r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+
+        raw_template = config.get(
+            "chat_template",
+            "{% for message in messages %}{{ message['role'] + ': ' + message['content'] + '\\n' }}{% endfor %}",
+        )
+        messages = PromptMaker.get_messages(user_prompt, functions)
+
+        jinja_template = Template(raw_template)
+        formatted_prompt = jinja_template.render(
+            messages=messages, add_generation_prompt=True
         )
 
-        final += PromptMaker.get_functions_as_prompt(functions)
-        final += "<|im_end|>\n"
-
-        final += f"<|im_start|>user\n{user_prompt}\n<|im_end|>\n"
-        final += "<|im_start|>assistant\n"
-
-        return final
+        return formatted_prompt

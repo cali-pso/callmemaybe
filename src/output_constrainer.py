@@ -1,49 +1,223 @@
 import re
 import numpy
-from typing import List, Dict, Tuple, Optional, Any
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import List, Dict
+from llm_sdk import Small_LLM_Model
 from src.models import FuncDefinition
 from src.errors import UnknownFunctionError
 
+MAX_TOKENS = 250
 
-class OutputConstrainer(BaseModel):
-    """
-    Applies logic-based mask filtering to probability logits.
 
-    By parsing the in-progress JSON string, this class determines which data
-    type is currently required and forcibly sets logits for invalid tokens to
-    negative infinity, guaranteeing syntax-compliant outputs.
-    """
+class OutputConstrainer:
+    def __init__(
+        self,
+        vocab: Dict[int, str],
+        model: Small_LLM_Model,
+        functions: List[FuncDefinition],
+    ) -> None:
+        self.functions = {function.name: function for function in functions}
+        self.vocab = vocab
+        self.vocab_size = len(model.get_logits_from_input_ids([0]))
+        self.model = model
+        self.masks = self.create_masks()
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    def update_state(
+        self, new_text: str, full_text: str, batch_idx: int
+    ) -> None:
+        i = batch_idx
+        try:
+            if (
+                self.state[i] == "STATE_EXPECT_START"
+                and "{" in new_text
+                and self.brackets[i] == 0
+            ):
+                self.brackets[i] += 1
+                self.state[i] = "STATE_EXPECT_FN_NAME_KEY"
 
-    vocab: Dict[int, str]
-    model: Any
-    functions: List[FuncDefinition]
+            elif self.state[i] == "STATE_EXPECT_FN_NAME_KEY":
+                if '"' in new_text:
+                    self.quotes[i] += new_text.count('"')
+                if self.quotes[i] == 2:
+                    self.quotes[i] = 0
+                    self.state[i] = "STATE_EXPECT_COLON"
 
-    def _get_current_context(
-        self, current_text: str
-    ) -> Tuple[Optional[str], List[str], bool]:
+            elif (
+                self.state[i] == "STATE_EXPECT_COLON"
+                and ":" in new_text
+                and not self.done_func_name[i]
+            ):
+                self.state[i] = "STATE_EXPECT_FN_NAME_VALUE"
+
+            elif self.state[i] == "STATE_EXPECT_FN_NAME_VALUE":
+                if '"' in new_text:
+                    self.quotes[i] += new_text.count('"')
+                if self.quotes[i] == 2:
+                    self.quotes[i] = 0
+                    try:
+                        self.function[i] = self.functions[
+                            full_text.split('"')[3]
+                        ]
+                        self.function_params[i] = list(
+                            self.function[i].parameters.values()
+                        )
+                    except Exception:
+                        raise UnknownFunctionError()
+                    self.state[i] = "STATE_EXPECT_COMMA"
+
+            elif (
+                self.state[i] == "STATE_EXPECT_COMMA"
+                and "," in new_text
+                and not self.done_func_name[i]
+            ):
+                self.done_func_name[i] = True
+                self.state[i] = "STATE_EXPECT_PARAM_KEY"
+
+            elif self.state[i] == "STATE_EXPECT_PARAM_KEY":
+                if '"' in new_text:
+                    self.quotes[i] += new_text.count('"')
+                if self.quotes[i] == 2:
+                    self.quotes[i] = 0
+                    self.state[i] = "STATE_EXPECT_COLON"
+
+            elif (
+                self.state[i] == "STATE_EXPECT_COLON"
+                and ":" in new_text
+                and self.done_func_name[i]
+                and not self.in_params[i]
+            ):
+                self.in_params[i] = True
+                self.state[i] = "STATE_EXPECT_START"
+
+            elif (
+                self.state[i] == "STATE_EXPECT_START"
+                and "{" in new_text
+                and self.brackets[i] == 1
+            ):
+                self.brackets[i] += 1
+                self.state[i] = "STATE_EXPECT_PARAM_NAME"
+
+            elif self.state[i] == "STATE_EXPECT_PARAM_NAME":
+                if '"' in new_text:
+                    self.quotes[i] += new_text.count('"')
+                if self.quotes[i] == 2:
+                    self.quotes[i] = 0
+                    self.state[i] = "STATE_EXPECT_COLON"
+
+            elif self.state[i] == "STATE_EXPECT_COLON" and ":" in new_text:
+                param_type = self.function_params[i][self.done_params[i]].type
+                if param_type == "integer":
+                    self.state[i] = "STATE_EXPECT_INT_PARAM"
+                elif param_type == "number" or param_type == "float":
+                    self.state[i] = "STATE_EXPECT_FLOAT_PARAM"
+                elif param_type == "string":
+                    self.state[i] = "STATE_EXPECT_STRING_PARAM"
+
+            elif self.state[i] in [
+                "STATE_EXPECT_INT_PARAM",
+                "STATE_EXPECT_FLOAT_PARAM",
+                "STATE_EXPECT_NUMBER_PARAM",
+            ] and ("," in new_text or "}" in new_text):
+                self.done_params[i] += 1
+                if (
+                    self.done_params[i] < len(self.function[i].parameters)
+                    and "," in new_text
+                ):
+                    self.state[i] = "STATE_EXPECT_PARAM_NAME"
+                elif "}" in new_text:
+                    self.brackets[i] -= 1
+                    self.state[i] = "STATE_EXPECT_END"
+
+            elif self.state[i] == "STATE_EXPECT_STRING_PARAM":
+                if '"' in new_text:
+                    self.quotes[i] += new_text.count('"')
+                if self.quotes[i] == 2 and (
+                    "," in new_text or "}" in new_text or " " in new_text
+                ):
+                    self.quotes[i] = 0
+                    self.done_params[i] += 1
+                    if (
+                        self.done_params[i] < len(self.function[i].parameters)
+                        and "," in new_text
+                    ):
+                        self.state[i] = "STATE_EXPECT_PARAM_NAME"
+                    elif "}" in new_text or " " in new_text:
+                        if "}" in new_text:
+                            self.brackets[i] -= 1
+                        self.state[i] = "STATE_EXPECT_END"
+
+            elif self.state[i] == "STATE_EXPECT_END":
+                if "}" in new_text:
+                    self.brackets[i] -= 1
+                if self.brackets[i] == 0:
+                    self.state[i] = "STATE_FINISHED"
+        except UnknownFunctionError:
+            self.state[i] = "STATE_EXPECT_END"
+
+    def reset_state(self, batch_size: int) -> None:
+        self.state = ["STATE_EXPECT_START"] * batch_size
+        self.brackets = [0] * batch_size
+        self.quotes = [0] * batch_size
+        self.done_func_name = [False] * batch_size
+        self.done_params = [0] * batch_size
+        self.in_params = [0] * batch_size
+        self.function = [None] * batch_size
+        self.function_params = [None] * batch_size
+
+    def create_masks(self) -> Dict[str, numpy.array]:
+        start = self.get_mask(r"^[\{]$")
+        colon = self.get_mask(r"^:\s?$")
+        comma = self.get_mask(r"^[,]$")
+        func_name_key = self.get_mask(r'^[\s"name]+$')
+        func_name_val = self.get_mask(r'^[\s"A-Za-z0-9_]+$')
+        param_key = self.get_mask(r'^[\s"parmetes]+$')
+        int_param = self.get_mask(r"^[\s0-9,\}]+$")
+        float_param = self.get_mask(r"^[\s0-9.,\}]+$")
+        string_param = self.get_mask(
+            r'^[\sA-Za-z0-9~`!@#\$%\^&\*\(\)_\+-=\{\}\[\]\|\\:;"\'<,>\.\?/]+$'
+        )
+        param_name = self.get_mask(r'^[\s"a-zA-Z0-9_]+$')
+        end = self.get_mask(r"^[\}]$")
+
+        masks = {
+            "STATE_EXPECT_START": start,
+            "STATE_EXPECT_COLON": colon,
+            "STATE_EXPECT_COMMA": comma,
+            "STATE_EXPECT_FN_NAME_KEY": func_name_key,
+            "STATE_EXPECT_FN_NAME_VALUE": func_name_val,
+            "STATE_EXPECT_PARAM_KEY": param_key,
+            "STATE_EXPECT_INT_PARAM": int_param,
+            "STATE_EXPECT_FLOAT_PARAM": float_param,
+            "STATE_EXPECT_STRING_PARAM": string_param,
+            "STATE_EXPECT_PARAM_NAME": param_name,
+            "STATE_EXPECT_END": end,
+        }
+        return masks
+
+    def get_mask(self, regex_pattern: str) -> numpy.ndarray:
         """
-        Parses the generated JSON text to determine:
-        1. Function Name
-        2. Current Parameter
-        3. Whether the cursor is currently inside a string value
+        Creates a boolean NumPy array where True indicates the token
+        is built entirely from the allowed character set.
         """
-        name_match = re.search(r'"func_name"\s*:\s*"([^"]+)"', current_text)
-        func_name = name_match.group(1) if name_match else None
+        mask = numpy.zeros(self.vocab_size, dtype=bool)
 
-        params_match = re.findall(r'"([^"]+)"\s*:', current_text)
-        params_match = [
-            s for s in params_match if s not in ["func_name", "parameters"]
-        ]
+        compiled_regex = re.compile(regex_pattern)
 
-        text_no_escapes = current_text.replace('\\"', "")
-        is_inside_string = text_no_escapes.count('"') % 2 != 0
+        for token_id_str, token_str in self.vocab.items():
+            token_id = int(token_id_str)
 
-        return func_name, params_match, is_inside_string
+            clean_token = token_str.replace("Ġ", " ")
+
+            if compiled_regex.fullmatch(clean_token):
+                if "\\" in token_str and "\\\\" not in token_str:
+                    pass
+                else:
+                    mask[token_id] = True
+
+        return mask
 
     def apply_constraints(
-        self, current_text: str, logits_np: numpy.ndarray
-    ) -> Tuple[numpy.ndarray, Tuple[Optional[str], List[str], bool]]:
-        pass
+        self, current_text: str, logits: list[float], batch_idx: int
+    ) -> list[float]:
+        return_np = numpy.array(logits, dtype=numpy.float32)
+        return_np[~self.masks[self.state[batch_idx]]] = -(numpy.inf)
+        return return_np
