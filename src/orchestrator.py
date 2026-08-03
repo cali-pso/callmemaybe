@@ -40,7 +40,6 @@ class Orchestrator:
 
     @staticmethod
     def load_vocabulary_mapping(vocab_path: str) -> dict[int, str]:
-        print(vocab_path)
         with open(vocab_path, "r", encoding="utf-8") as f:
             vocab_json = json.load(f)
 
@@ -69,4 +68,5 @@ class Orchestrator:
     def generate_with_constraints_batched(
         self, padded_ids: List[List[int]]
     ) -> List[str]:
+        print(f"Model files located at: {self.model_path}")
         return self.generator.generate_batch(padded_ids)

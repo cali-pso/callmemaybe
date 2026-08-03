@@ -29,7 +29,7 @@ class Generator:
         print(
             f"Time since generation start: {full_time:4f}s |",
             f"Batch generation time: {gen_time:4f}s",
-            f"| {(gen_time / actives):4f} T/s\n",
+            f"| {(actives / gen_time):4f} T/s\n",
         )
         self.last_observed_time = cur_time
 
