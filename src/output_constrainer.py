@@ -1,7 +1,6 @@
 import re
 import numpy
-from typing import List, Dict
-from llm_sdk import Small_LLM_Model
+from typing import List, Dict, Any
 from src.models import FuncDefinition
 from src.errors import UnknownFunctionError
 
@@ -12,7 +11,7 @@ class OutputConstrainer:
     def __init__(
         self,
         vocab: Dict[int, str],
-        model: Small_LLM_Model,
+        model: Any,
         functions: List[FuncDefinition],
     ) -> None:
         self.functions = {function.name: function for function in functions}
@@ -54,9 +53,12 @@ class OutputConstrainer:
                 if self.quotes[i] == 2:
                     self.quotes[i] = 0
                     try:
-                        self.function[i] = self.functions[
-                            full_text.split('"')[3]
-                        ]
+                        match = re.search(r'"name":\s*"([^"]+)"', full_text)
+                        if match:
+                            func_name = match.group(1)
+                            self.function[i] = self.functions[func_name]
+                        else:
+                            raise UnknownFunctionError()
                         self.function_params[i] = list(
                             self.function[i].parameters.values()
                         )
@@ -154,16 +156,16 @@ class OutputConstrainer:
             self.state[i] = "STATE_EXPECT_END"
 
     def reset_state(self, batch_size: int) -> None:
-        self.state = ["STATE_EXPECT_START"] * batch_size
-        self.brackets = [0] * batch_size
-        self.quotes = [0] * batch_size
-        self.done_func_name = [False] * batch_size
-        self.done_params = [0] * batch_size
-        self.in_params = [0] * batch_size
-        self.function = [None] * batch_size
-        self.function_params = [None] * batch_size
+        self.state: List[str] = ["STATE_EXPECT_START"] * batch_size
+        self.brackets: List[int] = [0] * batch_size
+        self.quotes: List[int] = [0] * batch_size
+        self.done_func_name: List[bool] = [False] * batch_size
+        self.done_params: List[int] = [0] * batch_size
+        self.in_params: List[int] = [0] * batch_size
+        self.function: List[Any] = [None] * batch_size
+        self.function_params: List[Any] = [None] * batch_size
 
-    def create_masks(self) -> Dict[str, numpy.array]:
+    def create_masks(self) -> Dict[str, numpy.ndarray]:
         start = self.get_mask(r"^[\{]$")
         colon = self.get_mask(r"^:\s?$")
         comma = self.get_mask(r"^[,]$")
@@ -216,8 +218,8 @@ class OutputConstrainer:
         return mask
 
     def apply_constraints(
-        self, current_text: str, logits: list[float], batch_idx: int
-    ) -> list[float]:
-        return_np = numpy.array(logits, dtype=numpy.float32)
+        self, current_text: str, logits: numpy.ndarray, batch_idx: int
+    ) -> numpy.ndarray:
+        return_np = logits
         return_np[~self.masks[self.state[batch_idx]]] = -(numpy.inf)
         return return_np

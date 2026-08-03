@@ -1,7 +1,7 @@
 import argparse
 import os
 import json
-from src.errors import ParsingError, UnknownFunctionError
+from src.errors import ParsingError
 from src.parser import Parser
 from src.orchestrator import Orchestrator
 
@@ -49,8 +49,6 @@ def main() -> None:
         functions = Parser.load_functions(args.functions_definition)
         orchestrator = Orchestrator(functions=functions)
 
-        final_results = []
-        total_prompts = len(prompts)
         padded_ids = orchestrator.get_padded_ids(prompts)
         batch_results = orchestrator.generate_with_constraints_batched(
             padded_ids

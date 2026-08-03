@@ -1,7 +1,7 @@
 import json
 import os
-from typing import List
-from llm_sdk import Small_LLM_Model
+from typing import List, Any
+from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 from src.generator import Generator
 from src.output_constrainer import OutputConstrainer
 from src.prompt_maker import PromptMaker
@@ -27,11 +27,11 @@ class Orchestrator:
         )
 
     @staticmethod
-    def get_model_path(model: Small_LLM_Model) -> str:
+    def get_model_path(model: Small_LLM_Model) -> Any:
         tokenizer_path = model.get_path_to_tokenizer_file()
         return os.path.dirname(tokenizer_path) + "/"
 
-    def load_tokenizer(self, tokenizer_path: str) -> dict[str, str]:
+    def load_tokenizer(self, tokenizer_path: str) -> Any:
         with open(tokenizer_path, "r") as f:
             tokenizer = json.load(f)
         self.eos_token = tokenizer["added_tokens"][0]["id"]
@@ -70,16 +70,3 @@ class Orchestrator:
         self, padded_ids: List[List[int]]
     ) -> List[str]:
         return self.generator.generate_batch(padded_ids)
-
-    def generate_with_constraints(self, user_prompt: str) -> str:
-        print(f"\n\nStarting generation process with {user_prompt}\n")
-        full_prompt = PromptMaker.build_prompt(
-            user_prompt,
-            self.functions,
-            self.model_path + "tokenizer_config.json",
-        )
-        answer_trad = ""
-        for choosen_trad in self.generator.generate(full_prompt):
-            answer_trad += choosen_trad
-            print(choosen_trad, end="", flush=True)
-        return answer_trad

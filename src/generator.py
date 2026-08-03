@@ -1,14 +1,14 @@
 import numpy
 import time
 import torch
-from typing import List
+from typing import List, Any
 
 
 MAX_TOKENS = 250
 
 
 class Generator:
-    def __init__(self, model, tokenizer, constrainer) -> None:
+    def __init__(self, model: Any, tokenizer: Any, constrainer: Any) -> None:
         self.model = model
         self.tokenizer = tokenizer
         self.constrainer = constrainer
@@ -16,7 +16,9 @@ class Generator:
         self.start_time = time.time()
         self.last_observed_time = self.start_time
 
-    def display_generated_texts(self, generated_texts: List[str], actives: int) -> None:
+    def display_generated_texts(
+        self, generated_texts: List[str], actives: int
+    ) -> None:
         print("-----------------------------------------------------------\n")
         for text in generated_texts:
             print(text)
@@ -59,13 +61,14 @@ class Generator:
             next_tokens = []
             next_active_indices = []
             rows_to_keep = []
+            next_token_logits_np = next_token_logits.cpu().numpy()
 
             for current_idx, original_idx in enumerate(active_indices):
                 if self.constrainer.state[original_idx] != "STATE_FINISHED":
-                    seq_logits = next_token_logits[current_idx].tolist()
+                    seq_logits_np = next_token_logits_np[current_idx]
                     logits_filtered = self.constrainer.apply_constraints(
                         generated_texts[original_idx],
-                        seq_logits,
+                        seq_logits_np,
                         batch_idx=original_idx,
                     )
                     chosen_token = int(numpy.argmax(logits_filtered))
