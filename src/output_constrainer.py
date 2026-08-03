@@ -1,28 +1,49 @@
 import re
 import numpy
 from typing import List, Dict, Any
+from pydantic import BaseModel, ConfigDict
 from src.models import FuncDefinition
 from src.errors import UnknownFunctionError
 
 MAX_TOKENS = 250
 
 
-class OutputConstrainer:
+class OutputConstrainer(BaseModel):
+    """Restrict LLM output tokens to ensure valid JSON structure."""
+
+    vocab: Dict[int, str]
+    model: Any
+    functions: Any = {}
+    vocab_size: int = 0
+    masks: Dict[str, Any] = {}
+    state: List[str] = []
+    brackets: List[int] = []
+    quotes: List[int] = []
+    done_func_name: List[bool] = []
+    done_params: List[int] = []
+    in_params: List[int] = []
+    function: List[Any] = []
+    function_params: List[Any] = []
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     def __init__(
         self,
         vocab: Dict[int, str],
         model: Any,
         functions: List[FuncDefinition],
+        **data: Any,
     ) -> None:
+        """Initialize the constrainer with vocabulary, model, and functions."""
+        super().__init__(vocab=vocab, model=model, **data)
         self.functions = {function.name: function for function in functions}
-        self.vocab = vocab
-        self.vocab_size = len(model.get_logits_from_input_ids([0]))
-        self.model = model
+        self.vocab_size = len(self.model.get_logits_from_input_ids([0]))
         self.masks = self.create_masks()
 
     def update_state(
         self, new_text: str, full_text: str, batch_idx: int
     ) -> None:
+        """Advance the state machine based on the newly generated text."""
         i = batch_idx
         try:
             if (
@@ -32,21 +53,18 @@ class OutputConstrainer:
             ):
                 self.brackets[i] += 1
                 self.state[i] = "STATE_EXPECT_FN_NAME_KEY"
-
             elif self.state[i] == "STATE_EXPECT_FN_NAME_KEY":
                 if '"' in new_text:
                     self.quotes[i] += new_text.count('"')
                 if self.quotes[i] == 2:
                     self.quotes[i] = 0
                     self.state[i] = "STATE_EXPECT_COLON"
-
             elif (
                 self.state[i] == "STATE_EXPECT_COLON"
                 and ":" in new_text
                 and not self.done_func_name[i]
             ):
                 self.state[i] = "STATE_EXPECT_FN_NAME_VALUE"
-
             elif self.state[i] == "STATE_EXPECT_FN_NAME_VALUE":
                 if '"' in new_text:
                     self.quotes[i] += new_text.count('"')
@@ -65,7 +83,6 @@ class OutputConstrainer:
                     except Exception:
                         raise UnknownFunctionError()
                     self.state[i] = "STATE_EXPECT_COMMA"
-
             elif (
                 self.state[i] == "STATE_EXPECT_COMMA"
                 and "," in new_text
@@ -73,14 +90,12 @@ class OutputConstrainer:
             ):
                 self.done_func_name[i] = True
                 self.state[i] = "STATE_EXPECT_PARAM_KEY"
-
             elif self.state[i] == "STATE_EXPECT_PARAM_KEY":
                 if '"' in new_text:
                     self.quotes[i] += new_text.count('"')
                 if self.quotes[i] == 2:
                     self.quotes[i] = 0
                     self.state[i] = "STATE_EXPECT_COLON"
-
             elif (
                 self.state[i] == "STATE_EXPECT_COLON"
                 and ":" in new_text
@@ -89,7 +104,6 @@ class OutputConstrainer:
             ):
                 self.in_params[i] = True
                 self.state[i] = "STATE_EXPECT_START"
-
             elif (
                 self.state[i] == "STATE_EXPECT_START"
                 and "{" in new_text
@@ -97,14 +111,12 @@ class OutputConstrainer:
             ):
                 self.brackets[i] += 1
                 self.state[i] = "STATE_EXPECT_PARAM_NAME"
-
             elif self.state[i] == "STATE_EXPECT_PARAM_NAME":
                 if '"' in new_text:
                     self.quotes[i] += new_text.count('"')
                 if self.quotes[i] == 2:
                     self.quotes[i] = 0
                     self.state[i] = "STATE_EXPECT_COLON"
-
             elif self.state[i] == "STATE_EXPECT_COLON" and ":" in new_text:
                 param_type = self.function_params[i][self.done_params[i]].type
                 if param_type == "integer":
@@ -113,7 +125,6 @@ class OutputConstrainer:
                     self.state[i] = "STATE_EXPECT_FLOAT_PARAM"
                 elif param_type == "string":
                     self.state[i] = "STATE_EXPECT_STRING_PARAM"
-
             elif self.state[i] in [
                 "STATE_EXPECT_INT_PARAM",
                 "STATE_EXPECT_FLOAT_PARAM",
@@ -128,7 +139,6 @@ class OutputConstrainer:
                 elif "}" in new_text:
                     self.brackets[i] -= 1
                     self.state[i] = "STATE_EXPECT_END"
-
             elif self.state[i] == "STATE_EXPECT_STRING_PARAM":
                 if '"' in new_text:
                     self.quotes[i] += new_text.count('"')
@@ -146,7 +156,6 @@ class OutputConstrainer:
                         if "}" in new_text:
                             self.brackets[i] -= 1
                         self.state[i] = "STATE_EXPECT_END"
-
             elif self.state[i] == "STATE_EXPECT_END":
                 if "}" in new_text:
                     self.brackets[i] -= 1
@@ -156,6 +165,7 @@ class OutputConstrainer:
             self.state[i] = "STATE_EXPECT_END"
 
     def reset_state(self, batch_size: int) -> None:
+        """Reset the internal tracking state for a new batch."""
         self.state: List[str] = ["STATE_EXPECT_START"] * batch_size
         self.brackets: List[int] = [0] * batch_size
         self.quotes: List[int] = [0] * batch_size
@@ -166,6 +176,7 @@ class OutputConstrainer:
         self.function_params: List[Any] = [None] * batch_size
 
     def create_masks(self) -> Dict[str, numpy.ndarray]:
+        """Compile regex patterns into token masks for validation."""
         start = self.get_mask(r"^[\{]$")
         colon = self.get_mask(r"^:\s?$")
         comma = self.get_mask(r"^[,]$")
@@ -196,30 +207,23 @@ class OutputConstrainer:
         return masks
 
     def get_mask(self, regex_pattern: str) -> numpy.ndarray:
-        """
-        Creates a boolean NumPy array where True indicates the token
-        is built entirely from the allowed character set.
-        """
+        """Create a boolean mask for tokens matching the given regex."""
         mask = numpy.zeros(self.vocab_size, dtype=bool)
-
         compiled_regex = re.compile(regex_pattern)
-
         for token_id_str, token_str in self.vocab.items():
             token_id = int(token_id_str)
-
             clean_token = token_str.replace("Ġ", " ")
-
             if compiled_regex.fullmatch(clean_token):
                 if "\\" in token_str and "\\\\" not in token_str:
                     pass
                 else:
                     mask[token_id] = True
-
         return mask
 
     def apply_constraints(
         self, current_text: str, logits: numpy.ndarray, batch_idx: int
     ) -> numpy.ndarray:
+        """Mask invalid tokens in the logits array based on current state."""
         return_np = logits
         return_np[~self.masks[self.state[batch_idx]]] = -(numpy.inf)
         return return_np

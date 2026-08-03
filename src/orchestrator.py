@@ -1,16 +1,32 @@
 import json
 import os
-from typing import List, Any
+from typing import List, Any, Dict
+from pydantic import BaseModel, ConfigDict
 from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
+
 from src.generator import Generator
 from src.output_constrainer import OutputConstrainer
 from src.prompt_maker import PromptMaker
 from src.models import Prompt
 
 
-class Orchestrator:
-    def __init__(self, functions: List) -> None:
-        self.functions = functions
+class Orchestrator(BaseModel):
+    """Coordinate the end-to-end function calling evaluation process."""
+
+    functions: List[Any]
+    model: Any = None
+    model_path: str = ""
+    vocab: Dict[int, str] = {}
+    tokenizer: Any = None
+    constrainer: Any = None
+    generator: Any = None
+    eos_token: int = 0
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def __init__(self, functions: List[Any], **data: Any) -> None:
+        """Initialize the orchestrator and its underlying components."""
+        super().__init__(functions=functions, **data)
         self.model = Small_LLM_Model()
         self.model_path = self.get_model_path(self.model)
         self.vocab = self.load_vocabulary_mapping(
@@ -23,26 +39,29 @@ class Orchestrator:
             vocab=self.vocab, model=self.model, functions=self.functions
         )
         self.generator = Generator(
-            self.model, self.tokenizer, self.constrainer
+            model=self.model,
+            tokenizer=self.tokenizer,
+            constrainer=self.constrainer,
         )
 
     @staticmethod
     def get_model_path(model: Small_LLM_Model) -> Any:
+        """Determine the absolute path to the model directory."""
         tokenizer_path = model.get_path_to_tokenizer_file()
         return os.path.dirname(tokenizer_path) + "/"
 
     def load_tokenizer(self, tokenizer_path: str) -> Any:
+        """Load the tokenizer configuration and extract eos token."""
         with open(tokenizer_path, "r") as f:
             tokenizer = json.load(f)
         self.eos_token = tokenizer["added_tokens"][0]["id"]
-
         return tokenizer
 
     @staticmethod
     def load_vocabulary_mapping(vocab_path: str) -> dict[int, str]:
+        """Load token ID to string mapping from the vocabulary file."""
         with open(vocab_path, "r", encoding="utf-8") as f:
             vocab_json = json.load(f)
-
         id_to_string = {
             int(token_id): token_str
             for token_str, token_id in vocab_json.items()
@@ -50,6 +69,7 @@ class Orchestrator:
         return id_to_string
 
     def get_padded_ids(self, prompts: List[Prompt]) -> List[List[int]]:
+        """Encode and pad user prompts to uniform length."""
         full_ids = []
         for prompt in prompts:
             full_prompt = PromptMaker.build_prompt(
@@ -58,6 +78,7 @@ class Orchestrator:
                 self.model_path + "tokenizer_config.json",
             )
             full_ids.append(self.model.encode(full_prompt)[0].tolist())
+
         max_len = max(len(ids) for ids in full_ids)
         padded_ids = []
         for ids in full_ids:
@@ -68,5 +89,6 @@ class Orchestrator:
     def generate_with_constraints_batched(
         self, padded_ids: List[List[int]]
     ) -> List[str]:
+        """Generate constrained responses for a padded batch of prompts."""
         print(f"Model files located at: {self.model_path}")
         return self.generator.generate_batch(padded_ids)

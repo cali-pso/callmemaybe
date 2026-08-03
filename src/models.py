@@ -3,19 +3,19 @@ from pydantic import BaseModel
 
 
 class Prompt(BaseModel):
-    """Represents a prompt as defined in input JSON"""
+    """Represent a prompt as defined in input JSON."""
 
     prompt: str
 
 
 class ParameterType(BaseModel):
-    """Represents a specific type for a parameter"""
+    """Represent a specific type for a parameter."""
 
     type: str
 
 
 class FuncDefinition(BaseModel):
-    """Represents a full function definition"""
+    """Represent a full function definition."""
 
     name: str
     description: str
