@@ -42,9 +42,9 @@ class Generator(BaseModel):
         gen_time = cur_time - self.last_observed_time
         full_time = cur_time - self.start_time
         print(
-            f"Time since generation start: {full_time:4f}s |",
-            f"Batch generation time: {gen_time:4f}s",
-            f"| {(actives / gen_time):4f} T/s\n",
+            f"Time since generation start: {full_time:.4}s |",
+            f"Batch generation time: {gen_time:.4}s",
+            f"| {(actives / gen_time):.5} T/s\n",
         )
         self.last_observed_time = cur_time
 
@@ -60,8 +60,8 @@ class Generator(BaseModel):
         )
         attention_mask = (input_tensor != self.eos_token).long()
         self.constrainer.reset_state(batch_size=batch_size)
+        print("Starting generation...")
         while tokens_count <= MAX_TOKENS and len(active_indices) > 0:
-            self.display_generated_texts(generated_texts, len(active_indices))
             with torch.no_grad():
                 out = self.model._model(
                     input_ids=input_tensor,
@@ -142,4 +142,5 @@ class Generator(BaseModel):
             ).unsqueeze(1)
             active_indices = next_active_indices
             tokens_count += 1
+            self.display_generated_texts(generated_texts, len(active_indices))
         return generated_texts
