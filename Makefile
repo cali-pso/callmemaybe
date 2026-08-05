@@ -4,12 +4,10 @@ MYPY = uv run mypy
 SRC = src
 
 install:
-	uv -n sync
+	uv sync
 	uv run hf download Qwen/Qwen3-0.6B
 
 run:
-	HF_HUB_OFFLINE=1
-	OFFLINE_MODE=True
 	$(PYTHON) -m $(SRC)
 
 debug:

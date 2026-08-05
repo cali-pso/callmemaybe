@@ -23,5 +23,5 @@ members = [
 [tool.uv.sources]
 llm-sdk = { workspace = true }
 
-#[[tool.uv.index]]
-#url = "https://download.pytorch.org/whl/cpu"
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cpu"
