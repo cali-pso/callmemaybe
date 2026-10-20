@@ -1,5 +1,6 @@
 __pycache__
 moulinette*
 .*
-uv.lock
+!.gitignore
+!.dockerignore
 data/output
